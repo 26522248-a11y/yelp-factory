@@ -130,9 +130,16 @@ def backfill(session) -> int:
 def main() -> None:
     box = SecretBox()
     rows: list[dict] = []
+    success_states = {"ACTIVE", "WARMING", "ONBOARDED"}
     with session_scope() as session:
         updated = backfill(session)
-        for account in session.query(Account).order_by(Account.created_at).all():
+        accounts = (
+            session.query(Account)
+            .filter(Account.state.in_(tuple(success_states)))
+            .order_by(Account.created_at)
+            .all()
+        )
+        for account in accounts:
             password = ""
             if account.password_enc:
                 try:

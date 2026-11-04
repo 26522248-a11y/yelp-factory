@@ -189,6 +189,11 @@ class SignupFlow:
         raw_proxy = ctx.data.get("raw_proxy") or settings.proxy.default_raw
         if not raw_proxy:
             raise ProxyDead("no proxy configured for the account")
+        from adapters.proxysession import rotate_session
+
+        # A pinned session id from .env dies after its sticky window (502 from the provider);
+        # every account gets its own deterministic 30-minute session instead (1 proxy/account).
+        raw_proxy = rotate_session(raw_proxy, str(ctx.account_id), sticky_minutes=settings.proxy.sticky_minutes)
 
         target = ProxyTarget(raw=raw_proxy, country=settings.target.country, city=persona.city)
         result = await probe(target, timeout_s=settings.proxy.probe_timeout_s)
@@ -363,6 +368,24 @@ class SignupFlow:
             classified = self._classify_error(errors)
             if classified is None:
                 ctx.data["form"] = {"email": persona.email_alias, "zip": persona.zip}
+                # Persist the credentials Yelp actually accepted (password/ZIP may have been
+                # regenerated after a validation error, E-18/E-32).
+                try:
+                    from core.crypto import SecretBox
+                    from db.models import Account
+                    from db.session import session_scope
+
+                    with session_scope() as session:
+                        row = session.get(Account, ctx.account_id)
+                        if row is not None:
+                            row.password_enc = SecretBox().encrypt(persona.password)
+                            row.email = persona.email_alias
+                            row.email_alias = persona.email_alias
+                            row.zip = persona.zip
+                            row.first_name = persona.first_name
+                            row.last_name = persona.last_name
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("credential_persist_failed", error=str(exc)[:160])
                 return {"inline_errors": [], "attempt": attempt + 1}
 
             code, reason = classified
@@ -566,7 +589,7 @@ class SignupFlow:
         page = self._page(ctx)
         persona: Persona = ctx.data["persona"]
         cookies = await ctx.data["browser"].context.cookies()
-        has_session = any(c.get("name", "").startswith(("yelp-user-id", "ysuid", "bse")) for c in cookies)
+        has_session = any(c.get("name", "") == "yelp-user-id" for c in cookies)
         if not has_session:
             # E-44: verified but not logged in -> log in with the stored credential.
             await page.goto("https://www.yelp.com/login?locale=en_US", wait_until="domcontentloaded", timeout=45_000)

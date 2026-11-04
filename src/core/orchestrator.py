@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -220,6 +221,209 @@ async def resume_account(account_id: uuid.UUID, deps: SignupDeps, *, raw_proxy: 
                 pass
         lock.stop_heartbeat()
         lock.release(account_id)
+
+
+async def probe_account(account_id: uuid.UUID, deps: SignupDeps) -> dict:
+    """Check whether the Yelp account exists by re-submitting its email on /signup.
+
+    Login itself sits behind DataDome on this proxy, but the signup page answers
+    "already registered" for existing emails, which is a reliable existence probe.
+    """
+    from adapters.browser import attach
+    from core.crypto import SecretBox
+    from db.models import Profile
+    from human.mouse import human_click
+    from human.typing import human_type
+    from selector_registry.resolver import SelectorRegistry
+
+    settings = deps.settings
+    account = load_account(account_id)
+    if account is None:
+        return {"exists": False, "reason": "account_missing"}
+    with session_scope() as session:
+        profile_row = session.query(Profile).filter(Profile.id == account.profile_id).one_or_none() if account.profile_id else None
+        gpm_profile_id = profile_row.gpm_profile_id if profile_row else None
+    # A missing profile only means the run died early; the account may still exist on Yelp.
+
+    password = SecretBox().decrypt(account.password_enc) if account.password_enc else ""
+    registry = deps.registry or SelectorRegistry.from_yaml()
+    from adapters.proxysession import rotate_session
+
+    probe_raw = rotate_session(
+        settings.proxy.default_raw,
+        f"probe-{account_id}-{int(time.time())}",
+        sticky_minutes=settings.proxy.sticky_minutes,
+    )
+    temp = deps.gpm.create_profile(
+        name=f"yf-probe-{str(account_id)[:8]}",
+        raw_proxy=probe_raw,
+        browser_version=settings.gpm.browser_version,
+    )
+    started = deps.gpm.start_profile(temp.id, window_size="1280,800", skip_proxy_check=True)
+    browser = None
+    try:
+        browser = await attach(started.cdp_url, timeout_s=settings.gpm.connect_timeout_s)
+        page = browser.page
+        await page.goto("https://www.yelp.com/signup?locale=en_US", wait_until="domcontentloaded", timeout=90_000)
+        await page.wait_for_timeout(3000)
+        for key, value in (
+            ("signup.first_name", account.first_name),
+            ("signup.last_name", account.last_name),
+            ("signup.email", account.email),
+            ("signup.password", password or "TempPass123!x"),
+            ("signup.postal_code", account.zip),
+        ):
+            field = await registry.find(page, key, required=False, timeout_ms=6000)
+            if field is not None:
+                await human_type(field, value)
+        submit = await registry.find(page, "signup.submit", required=False, timeout_ms=5000)
+        if submit is None:
+            return {"exists": None, "reason": "signup_form_missing", "email": account.email}
+        await human_click(page, submit)
+        await page.wait_for_timeout(9000)
+
+        content = (await page.content()).lower()
+        url = page.url
+        # The signup page always contains "Already on Yelp? Log in", so a bare "already"
+        # check is a false positive. Use the page state instead.
+        if "welcome to yelp" in content or ("extra-form" in content and "signup-form" not in content):
+            result = {"exists": True, "reason": "created_now", "email": account.email}
+        elif "signup-form" in content and ("already registered" in content or "already have an account" in content):
+            result = {"exists": True, "reason": "already_registered", "email": account.email}
+        elif "signup-form" in content and "wrong" in content:
+            result = {"exists": True, "reason": "wrong_password", "email": account.email}
+        else:
+            errors = await registry.find(page, "signup.inline_error", required=False, timeout_ms=2000)
+            texts = []
+            if errors is not None:
+                try:
+                    texts = await errors.all_inner_texts()
+                except Exception:  # noqa: BLE001
+                    texts = []
+            result = {"exists": None, "reason": "inconclusive", "email": account.email, "url": url, "errors": texts[:3]}
+        with session_scope() as session:
+            row = session.get(Account, account_id)
+            if row is not None:
+                row.substate = f"probe_{result['reason']}"
+        return result
+    finally:
+        if browser is not None:
+            try:
+                await browser.close()
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            deps.gpm.stop_profile(temp.id)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            deps.gpm.delete_profile(temp.id, hard=True)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def verify_login(account_id: uuid.UUID, deps: SignupDeps) -> dict:
+    """Prove the account exists by logging in with the stored credential."""
+    from adapters.browser import attach
+    from core.crypto import SecretBox
+    from db.models import Profile
+    from human.mouse import human_click
+    from human.typing import human_type
+
+    settings = deps.settings
+    account = load_account(account_id)
+    if account is None:
+        return {"ok": False, "reason": "account_missing"}
+    with session_scope() as session:
+        profile_row = session.query(Profile).filter(Profile.id == account.profile_id).one_or_none() if account.profile_id else None
+        gpm_profile_id = profile_row.gpm_profile_id if profile_row else None
+    if not gpm_profile_id:
+        return {"ok": False, "reason": "no_gpm_profile", "email": account.email}
+
+    password = SecretBox().decrypt(account.password_enc) if account.password_enc else ""
+    from adapters.proxysession import rotate_session
+
+    login_raw = rotate_session(
+        settings.proxy.default_raw, f"login-{account_id}-{int(time.time())}", sticky_minutes=settings.proxy.sticky_minutes
+    )
+    temp = deps.gpm.create_profile(
+        name=f"yf-login-{str(account_id)[:8]}",
+        raw_proxy=login_raw,
+        browser_version=settings.gpm.browser_version,
+    )
+    started = deps.gpm.start_profile(temp.id, window_size="1280,800", skip_proxy_check=True)
+    browser = None
+    try:
+        browser = await attach(started.cdp_url, timeout_s=settings.gpm.connect_timeout_s)
+        page = browser.page
+        await page.goto("https://www.yelp.com/login?locale=en_US", wait_until="domcontentloaded", timeout=60_000)
+        await page.wait_for_timeout(3000)
+        html = ""
+        try:
+            html = (await page.content()).lower()
+        except Exception:  # noqa: BLE001
+            pass
+        if "captcha-delivery" in html or "datadome" in html:
+            return {"ok": None, "reason": "datadome_blocked", "email": account.email}
+
+        # A live session redirects away from /login straight to the homepage.
+        early = await browser.context.cookies()
+        if any(c.get("name", "").startswith("yelp-user-id") for c in early):
+            with session_scope() as session:
+                row = session.get(Account, account_id)
+                if row is not None:
+                    row.substate = "login_ok"
+            return {"ok": True, "email": account.email, "url": page.url, "reason": "already_logged_in"}
+
+        email_field = await deps.registry.find(page, "login.email", required=False, timeout_ms=6000)
+        password_field = await deps.registry.find(page, "login.password", required=False, timeout_ms=4000)
+        if email_field is None or password_field is None:
+            return {"ok": False, "reason": "login_form_missing", "email": account.email, "url": page.url}
+        await human_type(email_field, account.email)
+        await human_type(password_field, password)
+        submit = await deps.registry.find(page, "login.submit", required=False, timeout_ms=4000)
+        if submit is None:
+            return {"ok": False, "reason": "login_submit_missing", "email": account.email}
+        await human_click(page, submit)
+        await page.wait_for_timeout(7000)
+
+        cookies = await browser.context.cookies()
+        has_session = any(c.get("name", "").startswith("yelp-user-id") for c in cookies)
+        try:
+            content = (await page.content()).lower()
+        except Exception:  # noqa: BLE001
+            content = ""
+        wrong = "wrong email or password" in content or "incorrect" in content
+        if has_session and not wrong:
+            with session_scope() as session:
+                row = session.get(Account, account_id)
+                if row is not None:
+                    row.substate = "login_ok"
+            return {"ok": True, "email": account.email, "url": page.url, "state": account.state}
+        with session_scope() as session:
+            row = session.get(Account, account_id)
+            if row is not None:
+                row.substate = "login_failed"
+        return {
+            "ok": False,
+            "reason": "wrong_credentials" if wrong else "no_session",
+            "email": account.email,
+            "url": page.url,
+        }
+    finally:
+        if browser is not None:
+            try:
+                await browser.close()
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            deps.gpm.stop_profile(temp.id)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            deps.gpm.delete_profile(temp.id, hard=True)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 async def run_warm(account_id: uuid.UUID, deps: SignupDeps, *, sessions: int = 1, max_seconds: int = 720) -> dict:

@@ -49,6 +49,39 @@ def _deps(settings):
     )
 
 
+def cmd_verify(args) -> int:
+    import uuid as _uuid
+
+    from core.orchestrator import probe_account, verify_login
+
+    settings = get_settings()
+    deps = _deps(settings)
+    if args.all:
+        from db.models import Account
+        from db.session import session_scope
+
+        with session_scope() as session:
+            ids = [a.id for a in session.query(Account).order_by(Account.created_at).all()]
+        results = {}
+        for account_id in ids:
+            try:
+                if args.probe:
+                    results[str(account_id)] = asyncio.run(probe_account(account_id, deps))
+                else:
+                    results[str(account_id)] = asyncio.run(verify_login(account_id, deps))
+            except Exception as exc:  # noqa: BLE001
+                results[str(account_id)] = {"exists": None, "reason": f"error: {str(exc)[:120]}"}
+        _print(results)
+        return 0
+    if args.probe:
+        result = asyncio.run(probe_account(_uuid.UUID(args.account), deps))
+        _print(result)
+        return 0 if result.get("exists") else 1
+    result = asyncio.run(verify_login(_uuid.UUID(args.account), deps))
+    _print(result)
+    return 0 if result.get("ok") else 1
+
+
 def cmd_schedule(args) -> int:
     from core.scheduler import bootstrap, run_due, scheduler_loop
 
@@ -251,6 +284,12 @@ def build_parser() -> argparse.ArgumentParser:
     schedule.add_argument("--limit", type=int, default=8)
     schedule.add_argument("--minutes", type=int, default=8)
     schedule.set_defaults(func=cmd_schedule)
+
+    verify = sub.add_parser("verify-login", help="prove an account really exists by logging in")
+    verify.add_argument("--account", default=None)
+    verify.add_argument("--all", action="store_true")
+    verify.add_argument("--probe", action="store_true", help="use the signup page to test if the email exists")
+    verify.set_defaults(func=cmd_verify)
 
     report = sub.add_parser("report", help="aggregate numbers for a time window")
     report.add_argument("--since", default="24h")
