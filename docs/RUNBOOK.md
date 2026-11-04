@@ -124,6 +124,26 @@ Fingerprint kiểm chứng trong browser: `navigator.webdriver=false`, `tz=Ameri
 .\.venv\Scripts\yf.exe report --since 1h
 ```
 
+## 7.1 Warming scheduler
+
+```powershell
+# Một lượt: tạo plan cho mọi account ACTIVE/WARMING rồi chạy các session tới hạn
+.\.venv\Scripts\yf.exe schedule --once --limit 8 --minutes 8
+
+# Chạy nền, mỗi 5 phút quét lại (giờ địa phương của từng city, 06:00-23:00)
+.\.venv\Scripts\yf.exe schedule --interval 300 --minutes 8
+```
+
+Quy tắc: mỗi account tối đa 1–3 session/ngày (`MAX_SESSIONS_PER_DAY`), mỗi session 4–12 phút,
+plan lưu ở `warming_plans`/`warming_tasks` nên restart không mất lịch. 5% session là "empty"
+(chỉ mở trang) theo spec 9.
+
+Chạy tay một account:
+
+```powershell
+.\.venv\Scripts\yf.exe warm --account <uuid> --sessions 2 --minutes 6
+```
+
 ## 8. Test
 
 ```powershell

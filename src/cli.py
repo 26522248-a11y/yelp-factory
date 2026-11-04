@@ -49,6 +49,19 @@ def _deps(settings):
     )
 
 
+def cmd_schedule(args) -> int:
+    from core.scheduler import bootstrap, run_due, scheduler_loop
+
+    settings = get_settings()
+    deps = _deps(settings)
+    if args.once:
+        _print(bootstrap())
+        _print(asyncio.run(run_due(deps, limit=args.limit, max_seconds=args.minutes * 60)))
+        return 0
+    asyncio.run(scheduler_loop(deps, interval_s=args.interval, max_seconds=args.minutes * 60))
+    return 0
+
+
 def cmd_warm(args) -> int:
     import uuid as _uuid
 
@@ -231,6 +244,13 @@ def build_parser() -> argparse.ArgumentParser:
     warm.add_argument("--sessions", type=int, default=1)
     warm.add_argument("--minutes", type=int, default=12)
     warm.set_defaults(func=cmd_warm)
+
+    schedule = sub.add_parser("schedule", help="plan and run due warming sessions")
+    schedule.add_argument("--once", action="store_true", help="single pass, then exit")
+    schedule.add_argument("--interval", type=int, default=300, help="seconds between passes")
+    schedule.add_argument("--limit", type=int, default=8)
+    schedule.add_argument("--minutes", type=int, default=8)
+    schedule.set_defaults(func=cmd_schedule)
 
     report = sub.add_parser("report", help="aggregate numbers for a time window")
     report.add_argument("--since", default="24h")

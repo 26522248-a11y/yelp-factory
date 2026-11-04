@@ -581,11 +581,11 @@ class SignupFlow:
         if identity is None:
             probe = ctx.data.get("proxy_probe")
             identity = build_identity(
-                account_id=persona.email_alias,
-                first_name=persona.first_name,
-                last_name=persona.last_name,
+                account_id=str(getattr(persona, "email_alias", ctx.account_id)),
+                first_name=getattr(persona, "first_name", "User"),
+                last_name=getattr(persona, "last_name", "Yelp"),
                 city_state=persona.city,
-                zip_code=persona.zip,
+                zip_code=getattr(persona, "zip", "33444"),
                 geo_city=getattr(probe, "city", None),
             )
             ctx.data["identity"] = identity

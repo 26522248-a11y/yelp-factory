@@ -189,6 +189,18 @@ class FakeBrowser:
         self.contexts = [self.context]
         self.closed = False
 
+    @property
+    def page(self) -> FakePage:
+        return self.context.pages[0]
+
+    @page.setter
+    def page(self, value: FakePage) -> None:
+        if not self.context.pages:
+            self.context.pages.append(value)
+        else:
+            self.context.pages[0] = value
+        value._context = self.context
+
     async def close(self) -> None:
         self.closed = True
 

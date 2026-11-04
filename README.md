@@ -24,9 +24,10 @@ Ma trận edge case: `docs/EDGE_CASES.md`. Vận hành: `docs/RUNBOOK.md`.
 | State machine + checkpoint + lock + reaper + governor + budget | ✅ |
 | Signup flow 12 state | ✅ (chưa chạy live Yelp) |
 | Warming P0-P4 + review generator (5-gram dedupe) | ✅ |
+| Warming scheduler (yf schedule) 1-3 session/ngày theo timezone | ✅ |
 | Reauth flow | ✅ |
 | CLI + admin API | ✅ |
-| Test | 93 passed (19/55 edge case) |
+| Test | 185 passed (55/55 edge case) |
 
 ## Cài đặt
 

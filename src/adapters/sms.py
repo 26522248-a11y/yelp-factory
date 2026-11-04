@@ -198,8 +198,8 @@ class FakeSmsProvider:
     name = "fake"
 
     def __init__(self, numbers: list[str] | None = None, codes: list[str] | None = None):
-        self.numbers = numbers or ["+15125550100", "+15125550101", "+15125550102"]
-        self.codes = codes or ["123456", "123456", "123456"]
+        self.numbers = numbers if numbers is not None else ["+15125550100", "+15125550101", "+15125550102"]
+        self.codes = codes if codes is not None else ["123456", "123456", "123456"]
         self.used: set[str] = set()
         self.issued: dict[str, list[str]] = {}
         self._counter = 0
