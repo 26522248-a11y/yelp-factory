@@ -49,6 +49,17 @@ def _deps(settings):
     )
 
 
+def cmd_avatar(args) -> int:
+    import uuid as _uuid
+
+    from core.orchestrator import upload_avatar
+
+    settings = get_settings()
+    deps = _deps(settings)
+    _print(asyncio.run(upload_avatar(_uuid.UUID(args.account), deps, avatar_path=args.file)))
+    return 0
+
+
 def cmd_trust(args) -> int:
     import uuid as _uuid
 
@@ -296,6 +307,11 @@ def build_parser() -> argparse.ArgumentParser:
     schedule.add_argument("--limit", type=int, default=8)
     schedule.add_argument("--minutes", type=int, default=8)
     schedule.set_defaults(func=cmd_schedule)
+
+    avatar = sub.add_parser("avatar", help="upload the stored avatar to an account profile")
+    avatar.add_argument("--account", required=True)
+    avatar.add_argument("--file", default=None)
+    avatar.set_defaults(func=cmd_avatar)
 
     trust = sub.add_parser("trust", help="show the trust score of an account")
     trust.add_argument("--account", required=True)

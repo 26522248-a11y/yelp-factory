@@ -588,17 +588,17 @@ class SignupFlow:
     async def _enter_email_verified(self, ctx: StageContext) -> dict[str, Any]:
         page = self._page(ctx)
         persona: Persona = ctx.data["persona"]
-        cookies = await ctx.data["browser"].context.cookies()
-        has_session = any(c.get("name", "") == "yelp-user-id" for c in cookies)
-        if not has_session:
+
+        from adapters.browser import is_logged_in
+
+        if not await is_logged_in(page):
             # E-44: verified but not logged in -> log in with the stored credential.
             await page.goto("https://www.yelp.com/login?locale=en_US", wait_until="domcontentloaded", timeout=45_000)
             await human_type(await self.registry.find(page, "login.email"), persona.email_alias)
             await human_type(await self.registry.find(page, "login.password"), persona.password)
             await human_click(page, await self.registry.find(page, "login.submit"))
             await page.wait_for_load_state("domcontentloaded", timeout=30_000)
-            cookies = await ctx.data["browser"].context.cookies()
-            if not any(c.get("name", "").startswith("yelp-user-id") for c in cookies):
+            if not await is_logged_in(page):
                 raise YFError("login after verification failed", code="reauth_failed")
         return {"session": True}
 

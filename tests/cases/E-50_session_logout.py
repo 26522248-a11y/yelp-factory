@@ -32,11 +32,11 @@ def ctx_with(page, cookies):
 
 
 async def test_E50_reauth_succeeds_with_new_cookie(settings, fake_page_factory):
-    page = fake_page_factory()
+    page = fake_page_factory(html='<a href="/user_details?userid=42">account</a>')
     page.add("form#ajax-login input#email", visible=True)
     page.add("form#ajax-login input#password", visible=True)
     page.add("form#ajax-login button[type='submit']", visible=True)
-    ctx = ctx_with(page, [{"name": "yelp-user-id", "value": "42"}])
+    ctx = ctx_with(page, [])
 
     flow = ReauthFlow(gpm=FakeGPM(), registry=REGISTRY, settings=settings)
     assert await flow._enter_warm(ctx) == {"reauth": True}

@@ -104,3 +104,12 @@ async def page_health(page: Any) -> bool:
         return True
     except Exception:  # noqa: BLE001
         return False
+
+
+async def is_logged_in(page: Any) -> bool:
+    """Yelp keeps the session in bse/bsi, not yelp-user-id; detect the account menu instead."""
+    try:
+        html = (await page.content()).lower()
+    except Exception:  # noqa: BLE001
+        return False
+    return "user_details?userid=" in html or "account settings" in html or "/logout" in html

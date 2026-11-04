@@ -367,8 +367,9 @@ async def verify_login(account_id: uuid.UUID, deps: SignupDeps) -> dict:
             return {"ok": None, "reason": "datadome_blocked", "email": account.email}
 
         # A live session redirects away from /login straight to the homepage.
-        early = await browser.context.cookies()
-        if any(c.get("name", "").startswith("yelp-user-id") for c in early):
+        from adapters.browser import is_logged_in
+
+        if await is_logged_in(page):
             with session_scope() as session:
                 row = session.get(Account, account_id)
                 if row is not None:
@@ -387,8 +388,7 @@ async def verify_login(account_id: uuid.UUID, deps: SignupDeps) -> dict:
         await human_click(page, submit)
         await page.wait_for_timeout(7000)
 
-        cookies = await browser.context.cookies()
-        has_session = any(c.get("name", "").startswith("yelp-user-id") for c in cookies)
+        has_session = await is_logged_in(page)
         try:
             content = (await page.content()).lower()
         except Exception:  # noqa: BLE001
@@ -422,6 +422,56 @@ async def verify_login(account_id: uuid.UUID, deps: SignupDeps) -> dict:
             pass
         try:
             deps.gpm.delete_profile(temp.id, hard=True)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def upload_avatar(account_id: uuid.UUID, deps: SignupDeps, *, avatar_path: str | None = None) -> dict:
+    """Upload the stored avatar through /user_photos/add (works only with a live session)."""
+    from pathlib import Path
+
+    from adapters.browser import attach
+    from db.models import Profile
+
+    settings = deps.settings
+    account = load_account(account_id)
+    if account is None:
+        return {"ok": False, "reason": "account_missing"}
+    path = Path(avatar_path or account.avatar_path or "")
+    if not path.exists():
+        return {"ok": False, "reason": "avatar_missing"}
+    with session_scope() as session:
+        profile_row = session.query(Profile).filter(Profile.id == account.profile_id).one_or_none() if account.profile_id else None
+        gpm_profile_id = profile_row.gpm_profile_id if profile_row else None
+    if not gpm_profile_id:
+        return {"ok": False, "reason": "no_gpm_profile"}
+
+    started = deps.gpm.start_profile(gpm_profile_id, window_size="1280,800", skip_proxy_check=True)
+    browser = None
+    try:
+        browser = await attach(started.cdp_url, timeout_s=settings.gpm.connect_timeout_s)
+        page = browser.page
+        await page.goto("https://www.yelp.com/user_photos/add", wait_until="domcontentloaded", timeout=90_000)
+        await page.wait_for_timeout(4000)
+        files = page.locator("input[type='file']")
+        if not await files.count():
+            return {"ok": False, "reason": "upload_not_available", "url": page.url}
+        await files.first.set_input_files(str(path.resolve()))
+        await page.wait_for_timeout(8000)
+        with session_scope() as session:
+            row = session.get(Account, account_id)
+            if row is not None:
+                row.substate = "avatar_uploaded"
+                row.avatar_path = str(path)
+        return {"ok": True, "url": page.url, "avatar": str(path)}
+    finally:
+        if browser is not None:
+            try:
+                await browser.close()
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            deps.gpm.stop_profile(gpm_profile_id)
         except Exception:  # noqa: BLE001
             pass
 

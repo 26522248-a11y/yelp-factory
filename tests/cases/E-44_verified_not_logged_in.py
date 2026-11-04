@@ -33,8 +33,8 @@ def ctx_for(page, cookies):
 
 
 async def test_E44_session_cookie_means_no_login(settings, fake_page_factory):
-    page = fake_page_factory()
-    ctx = ctx_for(page, [{"name": "yelp-user-id", "value": "42"}])
+    page = fake_page_factory(html='<a href="/user_details?userid=42">account</a>')
+    ctx = ctx_for(page, [])
     assert await SignupFlow(settings=settings, gpm=FakeGPM(), registry=REGISTRY, email_provider=None)._enter_email_verified(ctx) == {"session": True}
     assert page.gotos == []
 

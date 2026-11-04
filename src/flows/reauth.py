@@ -37,8 +37,9 @@ class ReauthFlow:
         await human_type(await self.registry.find(page, "login.password"), persona.password)
         await human_click(page, await self.registry.find(page, "login.submit"))
         await page.wait_for_load_state("domcontentloaded", timeout=30_000)
-        cookies = await browser.context.cookies()
-        if not any(c.get("name", "").startswith("yelp-user-id") for c in cookies):
+        from adapters.browser import is_logged_in
+
+        if not await is_logged_in(page):
             # Two failed reauths mean the account is gone, not that we should keep trying.
             raise YFError("reauth failed twice", code="reauth_failed")
         return {"reauth": True}
