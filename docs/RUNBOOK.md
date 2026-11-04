@@ -150,3 +150,14 @@ Cháº¡y tay má»™t account:
 .\.venv\Scripts\python.exe -m pytest tests -q
 .\.venv\Scripts\python.exe -m pytest tests/cases -q     # 1 file / edge case
 ```
+
+## 9. Warming / trust
+
+```powershell
+yf trust --account <uuid>          # score + components + review eligibility
+yf warm --account <uuid> --minutes 6
+yf schedule --once --limit 4 --minutes 8
+```
+
+Gate: <40 ch? browse, 40–59 thêm save/xem ?nh, 60–74 thêm vote/follow, >=75 m?i du?c review
+(kèm age >= 11 ngày, >= 6 session/7 ngày, không filter trong 7 ngày). Chi ti?t: `docs/WARMING.md`.

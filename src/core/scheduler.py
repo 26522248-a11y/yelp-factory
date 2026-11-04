@@ -62,6 +62,10 @@ def enqueue_day(account_id: uuid.UUID, *, city: str, day: int, rng: random.Rando
         # Deterministic per (account, day) so a retry never duplicates the plan.
         seed = int(uuid.uuid5(uuid.NAMESPACE_URL, f"{account_id}:{day}").hex[:12], 16)
         rng = random.Random(seed)
+    # One rest day per week (every 7th day), deterministic and easy to audit.
+    if day > 1 and day % 7 == 0:
+        log.info("warming_rest_day", account_id=str(account_id), day=day)
+        return 0
     plan_id = ensure_plan(account_id, city=city, day=day)
     specs: list[WarmingTaskSpec] = build_day_tasks(account_id, day, city=city, rng=rng)
     inserted = 0
@@ -95,6 +99,7 @@ def enqueue_day(account_id: uuid.UUID, *, city: str, day: int, rng: random.Rando
 def due_sessions(now: datetime | None = None, *, limit: int = 8) -> list[DueSession]:
     now = now or datetime.now(timezone.utc)
     sessions: list[DueSession] = []
+    seen_proxies: set[str] = set()
     with session_scope() as session:
         rows = session.execute(
             select(WarmingTask, WarmingPlan, Account)
@@ -102,21 +107,47 @@ def due_sessions(now: datetime | None = None, *, limit: int = 8) -> list[DueSess
             .join(Account, Account.id == WarmingPlan.account_id)
             .where(WarmingTask.kind == "session", WarmingTask.status == "pending", WarmingTask.due_at <= now)
             .order_by(WarmingTask.due_at)
-            .limit(limit)
+            .limit(limit * 3)
         ).all()
-        for task, plan, account in rows:
-            if account.state not in (AccountState.ACTIVE.value, AccountState.WARMING.value):
+        candidates = [(task, plan, account) for task, plan, account in rows]
+
+    from core.trust import latest_trust
+    from db.models import WarmingSession
+
+    for task, plan, account in candidates:
+        if len(sessions) >= limit:
+            break
+        if account.state not in (AccountState.ACTIVE.value, AccountState.WARMING.value):
+            continue
+        if not within_working_hours(account.city or "Austin, TX"):
+            continue
+        # Minimum 90 minutes between sessions of the same account (spec 3).
+        with session_scope() as session:
+            last = session.scalars(
+                select(WarmingSession)
+                .where(WarmingSession.account_id == account.id, WarmingSession.ended_at.isnot(None))
+                .order_by(WarmingSession.ended_at.desc())
+                .limit(1)
+            ).first()
+            last_end = last.ended_at if last else None
+        if last_end is not None:
+            elapsed = (now - last_end).total_seconds()
+            if elapsed < 90 * 60:
                 continue
-            if not within_working_hours(account.city or "Austin, TX"):
-                continue
-            sessions.append(
-                DueSession(
-                    account_id=account.id,
-                    task_id=task.id,
-                    city=account.city or "Austin, TX",
-                    phase=f"P{plan.phase}",
-                )
+        # Very low trust (risk events) pauses sessions; normal gating happens per action
+        # inside the session (trust < 40 => browse only).
+        proxy_key = getattr(account, "proxy_ip", None) or f"acc:{account.id}"
+        if proxy_key in seen_proxies:
+            continue
+        seen_proxies.add(proxy_key)
+        sessions.append(
+            DueSession(
+                account_id=account.id,
+                task_id=task.id,
+                city=account.city or "Austin, TX",
+                phase=f"P{plan.phase}",
             )
+        )
     return sessions
 
 

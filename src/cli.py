@@ -49,6 +49,18 @@ def _deps(settings):
     )
 
 
+def cmd_trust(args) -> int:
+    import uuid as _uuid
+
+    from core.trust import compute_trust, review_eligible
+
+    account_id = _uuid.UUID(args.account)
+    breakdown = compute_trust(account_id)
+    ok, reason = review_eligible(account_id)
+    _print({"account": args.account, "score": breakdown.score, "components": breakdown.as_dict(), "review_eligible": ok, "review_reason": reason})
+    return 0
+
+
 def cmd_verify(args) -> int:
     import uuid as _uuid
 
@@ -284,6 +296,10 @@ def build_parser() -> argparse.ArgumentParser:
     schedule.add_argument("--limit", type=int, default=8)
     schedule.add_argument("--minutes", type=int, default=8)
     schedule.set_defaults(func=cmd_schedule)
+
+    trust = sub.add_parser("trust", help="show the trust score of an account")
+    trust.add_argument("--account", required=True)
+    trust.set_defaults(func=cmd_trust)
 
     verify = sub.add_parser("verify-login", help="prove an account really exists by logging in")
     verify.add_argument("--account", default=None)

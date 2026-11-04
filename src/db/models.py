@@ -288,3 +288,65 @@ class SMSNumber(Base):
     used_by_account: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("accounts.id"))
     state: Mapped[str] = mapped_column(String(24), default="available")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# --------------------------------------------------------------------------------------
+# Warming / trust (spec v1.0)
+# --------------------------------------------------------------------------------------
+
+
+class TrustScore(Base):
+    __tablename__ = "trust_scores"
+    __table_args__ = (Index("ix_trust_account_ts", "account_id", "ts"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id"), nullable=False)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    score: Mapped[int] = mapped_column(Integer, nullable=False)
+    components: Mapped[dict] = mapped_column(JSONB, default=dict)
+
+
+class ActionLog(Base):
+    __tablename__ = "action_log"
+    __table_args__ = (Index("ix_action_account_ts", "account_id", "ts"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id"), nullable=False)
+    session_id: Mapped[uuid.UUID | None] = mapped_column()
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    target: Mapped[str | None] = mapped_column(String(300))
+    meta: Mapped[dict] = mapped_column(JSONB, default=dict)
+
+
+class WarmingSession(Base):
+    __tablename__ = "warming_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id"), nullable=False)
+    plan_id: Mapped[uuid.UUID | None] = mapped_column()
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    actions: Mapped[int] = mapped_column(Integer, default=0)
+    entry_path: Mapped[str | None] = mapped_column(String(32))
+    proxy_ip: Mapped[str | None] = mapped_column(String(64))
+    trust_before: Mapped[int | None] = mapped_column(Integer)
+    trust_after: Mapped[int | None] = mapped_column(Integer)
+
+
+class ReviewAttempt(Base):
+    __tablename__ = "review_attempts"
+    __table_args__ = (Index("ix_review_account_biz", "account_id", "business_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id"), nullable=False)
+    business_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)
+    words: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str | None] = mapped_column(Text)
+    photo: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(24), default="submitted")
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    filtered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+

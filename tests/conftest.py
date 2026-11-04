@@ -112,10 +112,26 @@ def make_account(db_ready):
 
     from sqlalchemy import delete
 
-    from db.models import Account, AccountLock, Quarantine, Run, Step, WarmingPlan, WarmingTask
+    from db.models import (
+        Account,
+        AccountLock,
+        ActionLog,
+        Quarantine,
+        ReviewAttempt,
+        Run,
+        Step,
+        TrustScore,
+        WarmingPlan,
+        WarmingSession,
+        WarmingTask,
+    )
 
     with session_scope() as session:
         if created:
+            session.execute(delete(ReviewAttempt).where(ReviewAttempt.account_id.in_(created)))
+            session.execute(delete(ActionLog).where(ActionLog.account_id.in_(created)))
+            session.execute(delete(TrustScore).where(TrustScore.account_id.in_(created)))
+            session.execute(delete(WarmingSession).where(WarmingSession.account_id.in_(created)))
             session.execute(delete(WarmingTask).where(WarmingTask.plan_id.in_(select_plan_ids(created))))
             session.execute(delete(WarmingPlan).where(WarmingPlan.account_id.in_(created)))
             session.execute(delete(Step).where(Step.run_id.in_(select_run_ids(created))))

@@ -446,12 +446,21 @@ async def run_warm(account_id: uuid.UUID, deps: SignupDeps, *, sessions: int = 1
     started = deps.gpm.start_profile(gpm_profile_id, window_size="1280,800", skip_proxy_check=True)
     browser = await attach(started.cdp_url, timeout_s=settings.gpm.connect_timeout_s)
     runner = WarmingRunner(gpm=deps.gpm, registry=deps.registry, settings=settings)
-    plan = DailyBudget.for_phase(phase_for_day(4))
+    from core.scheduler import daily_plan_day
+
+    day = daily_plan_day(account_id)
+    phase = phase_for_day(day)
+    plan = DailyBudget.for_phase(phase)
     results = []
     try:
         for index in range(sessions):
             empty = __import__("human.timing", fromlist=["empty_session"]).empty_session()
-            outcome = await runner.run_session(_WarmCtx(account_id, browser), budget=plan, empty=empty, max_seconds=max_seconds)
+            outcome = await runner.run_session(
+                _WarmCtx(account_id, browser, phase=phase, proxy_ip=getattr(account, "proxy_ip", None)),
+                budget=plan,
+                empty=empty,
+                max_seconds=max_seconds,
+            )
             results.append(outcome)
             persist_account_state(account_id, AccountState.WARMING)
     finally:
@@ -467,9 +476,18 @@ async def run_warm(account_id: uuid.UUID, deps: SignupDeps, *, sessions: int = 1
 
 
 class _WarmCtx:
-    def __init__(self, account_id: uuid.UUID, browser):
+    def __init__(self, account_id: uuid.UUID, browser, *, phase: str = "P1", proxy_ip: str | None = None, plan_id=None):
         self.account_id = account_id
-        self.data = {"browser": browser}
+        self.data = {
+            "browser": browser,
+            "phase": phase,
+            "proxy_ip": proxy_ip,
+            "plan_id": plan_id,
+            "review_enabled": True,
+            "entry_path": __import__("random").choices(
+                ["search", "direct", "category", "referral"], weights=[6, 2, 1, 1], k=1
+            )[0],
+        }
 
 
 async def run_batch(account_ids: list[uuid.UUID], deps: SignupDeps, *, concurrency: int = 1, proxy: str | None = None) -> dict:

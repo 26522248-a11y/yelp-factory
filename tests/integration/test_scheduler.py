@@ -69,3 +69,50 @@ def test_due_sessions_respect_working_hours(make_account, monkeypatch):
     enqueue_day(account.id, city="Delray Beach, FL", day=4)
     monkeypatch.setattr("core.scheduler.within_working_hours", lambda city: False)
     assert all(item.account_id != account.id for item in due_sessions(limit=50))
+
+
+def test_due_sessions_enforce_90_minute_gap(make_account, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    from core.scheduler import due_sessions
+    from db.models import AccountState, WarmingSession
+    from db.session import session_scope
+
+    account = make_account(state=AccountState.ACTIVE)
+    enqueue_day(account.id, city="Delray Beach, FL", day=4)
+    for task in _sessions(account.id):
+        with session_scope() as session:
+            session.get(WarmingTask, task.id).due_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+    with session_scope() as session:
+        session.add(
+            WarmingSession(
+                account_id=account.id,
+                started_at=datetime.now(timezone.utc) - timedelta(minutes=20),
+                ended_at=datetime.now(timezone.utc) - timedelta(minutes=10),
+                actions=3,
+            )
+        )
+    monkeypatch.setattr("core.scheduler.within_working_hours", lambda city: True)
+    assert all(item.account_id != account.id for item in due_sessions(limit=50))
+
+
+def test_due_sessions_cap_one_account_per_proxy(make_account, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    from core.scheduler import due_sessions
+    from db.models import Account, AccountState
+    from db.session import session_scope
+
+    first = make_account(state=AccountState.ACTIVE)
+    second = make_account(state=AccountState.ACTIVE)
+    with session_scope() as session:
+        session.get(Account, first.id).proxy_ip = "203.0.113.9"
+        session.get(Account, second.id).proxy_ip = "203.0.113.9"
+    for account in (first, second):
+        enqueue_day(account.id, city="Delray Beach, FL", day=4)
+        for task in _sessions(account.id):
+            with session_scope() as session:
+                session.get(WarmingTask, task.id).due_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+    monkeypatch.setattr("core.scheduler.within_working_hours", lambda city: True)
+    due = [item.account_id for item in due_sessions(limit=50)]
+    assert len([a for a in due if a in (first.id, second.id)]) == 1

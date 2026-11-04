@@ -15,12 +15,15 @@ from obs.log import get_logger
 
 log = get_logger("identity")
 
-# Public, large-image sources. Order matters: first one that returns a real JPEG wins.
+# Public image sources for avatars. The user asked for landscape/pet/meme style pictures
+# rather than faces, so the face generator is only the last resort.
 AVATAR_SOURCES = [
-    "https://thispersondoesnotexist.com/",
-    "https://randomuser.me/api/portraits/{gender}/{n}.jpg",
+    "https://loremflickr.com/800/800/{tag}?lock={seed}",
+    "https://cataas.com/cat?width=800&height=800&t={seed}",
     "https://picsum.photos/seed/{seed}/800/800",
+    "https://thispersondoesnotexist.com/",
 ]
+AVATAR_TAGS = ["dog", "cat", "landscape", "nature", "puppy", "kitten", "mountains", "beach"]
 
 STREET_NAMES = [
     "Ocean Blvd", "Atlantic Ave", "Palm Beach Rd", "Federal Hwy", "Cypress Ln",
@@ -86,16 +89,19 @@ async def fetch_avatar(dest: Path, *, gender: str | None = None, seed: str | Non
     """Download one photo from a public source; returns the local path or None."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     seed = seed or secrets.token_hex(6)
+    tag = random.choice(AVATAR_TAGS)
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     async with httpx.AsyncClient(timeout=45, follow_redirects=True, headers=headers, trust_env=False) as client:
         for template in AVATAR_SOURCES:
-            url = template.format(gender=(gender or "women").lower(), n=random.randint(1, 90), seed=seed)
+            url = template.format(gender=(gender or "women").lower(), n=random.randint(1, 90), seed=seed, tag=tag)
             try:
                 response = await client.get(url)
                 if response.status_code != 200 or len(response.content) < 10_000:
                     continue
+                if not response.headers.get("content-type", "").startswith("image"):
+                    continue
                 dest.write_bytes(response.content)
-                log.info("avatar_downloaded", source=url.split("?")[0], bytes=len(response.content))
+                log.info("avatar_downloaded", source=url.split("?")[0], bytes=len(response.content), tag=tag)
                 return dest
             except httpx.HTTPError as exc:
                 log.warning("avatar_source_failed", source=template, error=str(exc)[:120])
