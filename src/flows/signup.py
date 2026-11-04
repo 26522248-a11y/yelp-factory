@@ -200,6 +200,16 @@ class SignupFlow:
 
         ctx.data["proxy"] = target
         ctx.data["proxy_probe"] = result
+        try:
+            from db.models import Account
+            from db.session import session_scope
+
+            with session_scope() as session:
+                row = session.get(Account, ctx.account_id)
+                if row is not None and result.ip:
+                    row.proxy_ip = result.ip
+        except Exception as exc:  # noqa: BLE001
+            log.warning("proxy_ip_persist_failed", error=str(exc)[:160])
 
         from human.timing import CITY_TIMEZONES
 

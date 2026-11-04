@@ -1,8 +1,15 @@
-"""Backfill account profile fields from ONBOARDED step metadata, then export CSV/JSON."""
+"""Backfill profile/proxy fields, then export accounts to CSV/JSON for the sheet.
+
+Sheet columns (tab "acc reg"):
+raw, mail, pass, mail kp, ip, status, full_name, birthday, address, city,
+phone, gpm_profile_id, gpm_profile_name, state, last_error, created_at, activated_at
+"""
 
 from __future__ import annotations
 
+import csv
 import json
+import re
 from pathlib import Path
 
 from core.crypto import SecretBox
@@ -17,73 +24,103 @@ FIELDS = [
     "mail",
     "pass",
     "mail kp",
+    "ip",
     "status",
-    "first_name",
-    "last_name",
-    "gender",
+    "full_name",
     "birthday",
     "address",
     "city",
-    "zip",
     "phone",
     "gpm_profile_id",
     "gpm_profile_name",
-    "yelp_user_id",
     "state",
-    "substate",
     "last_error",
-    "retry_count",
     "created_at",
     "activated_at",
-    "account_id",
 ]
 
+_IP_RE = re.compile(r"ip='([0-9a-fA-F:.]+)'")
 
-def backfill(session) -> int:
+
+def _identity_for(session, account: Account) -> dict:
+    step = (
+        session.query(Step)
+        .join(Run, Run.id == Step.run_id)
+        .filter(Run.account_id == account.id, Step.name == "ONBOARDED", Step.status == "DONE")
+        .order_by(Step.id.desc())
+        .first()
+    )
+    identity = {}
+    if step and step.meta:
+        value = (step.meta.get("data") or {}).get("identity")
+        if isinstance(value, dict):
+            identity = value
+    return identity
+
+
+def _build_identity(account: Account) -> dict:
     from flows.identity import build_identity
 
-    updated = 0
-    accounts = session.query(Account).all()
-    for acc in accounts:
+    generated = build_identity(
+        account_id=account.email,
+        first_name=account.first_name,
+        last_name=account.last_name,
+        city_state=account.city or "Delray Beach, FL",
+        zip_code=account.zip or "33444",
+    )
+    return {
+        "gender": generated.gender,
+        "birth_date": generated.birth_date.isoformat(),
+        "street": generated.street,
+        "city": generated.city,
+        "state": generated.state,
+        "zip": generated.zip,
+    }
+
+
+def _proxy_ip_for(session, account: Account) -> str:
+    if account.proxy_ip:
+        return account.proxy_ip
+    for name in ("PROXY_BOUND", "PROVISIONING"):
         step = (
             session.query(Step)
             .join(Run, Run.id == Step.run_id)
-            .filter(Run.account_id == acc.id, Step.name == "ONBOARDED", Step.status == "DONE")
+            .filter(Run.account_id == account.id, Step.name == name, Step.status == "DONE")
             .order_by(Step.id.desc())
             .first()
         )
-        identity = {}
-        if step and step.meta:
-            identity = (step.meta.get("data") or {}).get("identity") or {}
-        if not isinstance(identity, dict) or not identity:
-            # Identity is deterministic per account, so it can always be regenerated.
-            identity = {
-                "gender": None,
-            }
-            generated = build_identity(
-                account_id=acc.email,
-                first_name=acc.first_name,
-                last_name=acc.last_name,
-                city_state=acc.city or "Delray Beach, FL",
-                zip_code=acc.zip or "33444",
-            )
-            identity = {
-                "gender": generated.gender,
-                "birth_date": generated.birth_date.isoformat(),
-                "street": generated.street,
-                "city": generated.city,
-                "state": generated.state,
-                "zip": generated.zip,
-            }
+        if not step or not step.meta:
+            continue
+        data = step.meta.get("data") or {}
+        if isinstance(data.get("proxy_ip"), str) and data["proxy_ip"]:
+            return data["proxy_ip"]
+        probe = data.get("proxy_probe")
+        if isinstance(probe, str):
+            match = _IP_RE.search(probe)
+            if match:
+                return match.group(1)
+    return ""
+
+
+def backfill(session) -> int:
+    updated = 0
+    for account in session.query(Account).all():
         changed = False
-        if not acc.gender and identity.get("gender"):
-            acc.gender = identity["gender"]
+        identity = _identity_for(session, account) or _build_identity(account)
+        if not account.gender and identity.get("gender"):
+            account.gender = identity["gender"]
             changed = True
-        if not acc.birth_date and identity.get("birth_date"):
-            acc.birth_date = identity["birth_date"]
+        if not account.birth_date and identity.get("birth_date"):
+            account.birth_date = identity["birth_date"]
             changed = True
-        if not acc.address_line and identity.get("street"):
-            acc.address_line = f"{identity['street']}, {identity.get('city','')}, {identity.get('state','')} {identity.get('zip','')}".strip(", ")
+        if not account.address_line and identity.get("street"):
+            account.address_line = (
+                f"{identity['street']}, {identity.get('city', '')}, {identity.get('state', '')} {identity.get('zip', '')}"
+            ).strip(", ")
+            changed = True
+        proxy_ip = _proxy_ip_for(session, account)
+        if proxy_ip and not account.proxy_ip:
+            account.proxy_ip = proxy_ip
             changed = True
         if changed:
             updated += 1
@@ -95,49 +132,41 @@ def main() -> None:
     rows: list[dict] = []
     with session_scope() as session:
         updated = backfill(session)
-        for acc in session.query(Account).order_by(Account.created_at).all():
+        for account in session.query(Account).order_by(Account.created_at).all():
             password = ""
-            if acc.password_enc:
+            if account.password_enc:
                 try:
-                    password = box.decrypt(acc.password_enc)
+                    password = box.decrypt(account.password_enc)
                 except Exception:
                     password = "<decrypt-failed>"
-            profile = session.get(Profile, acc.profile_id) if acc.profile_id else None
+            profile = session.get(Profile, account.profile_id) if account.profile_id else None
             rows.append(
                 {
-                    "raw": f"{acc.email}:{password}",
-                    "mail": acc.email,
+                    "raw": f"{account.email}:{password}",
+                    "mail": account.email,
                     "pass": password,
-                    "mail kp": acc.email_alias or "",
-                    "status": f"{acc.state}{('/' + acc.substate) if acc.substate else ''}",
-                    "first_name": acc.first_name,
-                    "last_name": acc.last_name,
-                    "gender": acc.gender or "",
-                    "birthday": acc.birth_date or "",
-                    "address": acc.address_line or "",
-                    "city": acc.city,
-                    "zip": acc.zip,
-                    "phone": acc.phone_e164 or "",
+                    "mail kp": account.email_alias or "",
+                    "ip": _proxy_ip_for(session, account),
+                    "status": f"{account.state}{('/' + account.substate) if account.substate else ''}",
+                    "full_name": f"{account.first_name} {account.last_name}".strip(),
+                    "birthday": account.birth_date or "",
+                    "address": account.address_line or "",
+                    "city": account.city,
+                    "phone": account.phone_e164 or "",
                     "gpm_profile_id": profile.gpm_profile_id if profile else "",
                     "gpm_profile_name": profile.name if profile else "",
-                    "yelp_user_id": acc.yelp_user_id or "",
-                    "state": acc.state,
-                    "substate": acc.substate or "",
-                    "last_error": acc.last_error_code or acc.quarantine_reason or "",
-                    "retry_count": acc.retry_count,
-                    "created_at": acc.created_at.strftime("%Y-%m-%d %H:%M") if acc.created_at else "",
-                    "activated_at": acc.activated_at.strftime("%Y-%m-%d %H:%M") if acc.activated_at else "",
-                    "account_id": str(acc.id),
+                    "state": account.state,
+                    "last_error": account.last_error_code or account.quarantine_reason or "",
+                    "created_at": account.created_at.strftime("%Y-%m-%d %H:%M") if account.created_at else "",
+                    "activated_at": account.activated_at.strftime("%Y-%m-%d %H:%M") if account.activated_at else "",
                 }
             )
     (OUT / "accounts.json").write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
-    import csv
-
     with (OUT / "accounts.csv").open("w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=FIELDS)
         writer.writeheader()
         writer.writerows(rows)
-    print(json.dumps({"accounts": len(rows), "backfilled": updated}))
+    print(json.dumps({"accounts": len(rows), "backfilled": updated, "fields": len(FIELDS)}))
 
 
 if __name__ == "__main__":

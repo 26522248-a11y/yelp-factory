@@ -115,6 +115,7 @@ class Account(Base):
     birth_date: Mapped[str | None] = mapped_column(String(16))
     address_line: Mapped[str | None] = mapped_column(String(300))
     avatar_path: Mapped[str | None] = mapped_column(String(400))
+    proxy_ip: Mapped[str | None] = mapped_column(String(64))
     state: Mapped[str] = mapped_column(String(32), default=AccountState.NEW.value, nullable=False)
     substate: Mapped[str | None] = mapped_column(String(64))
     retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
