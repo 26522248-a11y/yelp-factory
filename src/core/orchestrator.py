@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from adapters.base import YFError
-from core.checkpoints import CheckpointStore, close_run, load_account, open_run
+from core.checkpoints import CheckpointStore, close_run, load_account, open_run, persist_account_state
 from core.config import Settings
 from core.crypto import SecretBox
 from core.lock import AccountLockManager
@@ -220,6 +220,52 @@ async def resume_account(account_id: uuid.UUID, deps: SignupDeps, *, raw_proxy: 
                 pass
         lock.stop_heartbeat()
         lock.release(account_id)
+
+
+async def run_warm(account_id: uuid.UUID, deps: SignupDeps, *, sessions: int = 1, max_seconds: int = 720) -> dict:
+    """Warm an ACTIVE account: reopen the profile, run N human-like sessions."""
+    from adapters.browser import attach
+    from core.budget import DailyBudget, phase_for_day
+    from db.models import Profile
+    from flows.warmup import WarmingRunner
+
+    settings = deps.settings
+    account = load_account(account_id)
+    if account is None:
+        raise KeyError(account_id)
+    with session_scope() as session:
+        profile_row = session.query(Profile).filter(Profile.id == account.profile_id).one_or_none() if account.profile_id else None
+        gpm_profile_id = profile_row.gpm_profile_id if profile_row else None
+    if not gpm_profile_id:
+        raise RuntimeError("account has no GPM profile; run signup first")
+
+    started = deps.gpm.start_profile(gpm_profile_id, window_size="1280,800", skip_proxy_check=True)
+    browser = await attach(started.cdp_url, timeout_s=settings.gpm.connect_timeout_s)
+    runner = WarmingRunner(gpm=deps.gpm, registry=deps.registry, settings=settings)
+    plan = DailyBudget.for_phase(phase_for_day(4))
+    results = []
+    try:
+        for index in range(sessions):
+            empty = __import__("human.timing", fromlist=["empty_session"]).empty_session()
+            outcome = await runner.run_session(_WarmCtx(account_id, browser), budget=plan, empty=empty, max_seconds=max_seconds)
+            results.append(outcome)
+            persist_account_state(account_id, AccountState.WARMING)
+    finally:
+        try:
+            await browser.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            deps.gpm.stop_profile(gpm_profile_id)
+        except Exception:  # noqa: BLE001
+            pass
+    return {"account": str(account_id), "sessions": results, "budget": plan.to_json()}
+
+
+class _WarmCtx:
+    def __init__(self, account_id: uuid.UUID, browser):
+        self.account_id = account_id
+        self.data = {"browser": browser}
 
 
 async def run_batch(account_ids: list[uuid.UUID], deps: SignupDeps, *, concurrency: int = 1, proxy: str | None = None) -> dict:

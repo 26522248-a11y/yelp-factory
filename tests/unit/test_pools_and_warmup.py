@@ -72,3 +72,26 @@ def test_plan_phases_limit_actions():
 def test_reviews_start_at_day_11():
     tasks = build_day_tasks(__import__("uuid").uuid4(), day=22, city="Austin, TX")
     assert any(t.kind == "review" for t in tasks)
+
+def test_identity_is_deterministic_and_plausible():
+    from flows.identity import build_identity
+
+    a = build_identity(account_id="acc-1", first_name="A", last_name="B", city_state="Delray Beach, FL", zip_code="33444")
+    b = build_identity(account_id="acc-1", first_name="A", last_name="B", city_state="Delray Beach, FL", zip_code="33444")
+    assert a.birth_date == b.birth_date
+    assert a.street == b.street
+    assert 25 <= a.age <= 48
+    assert a.city == "Delray Beach" and a.state == "FL"
+    assert "33444" in a.address_line()
+    assert a.gender in ("Male", "Female")
+
+
+async def test_profile_completion_is_best_effort(fake_page_factory):
+    from flows.identity import build_identity
+    from flows.profile_settings import fill_extra_form
+    from selector_registry.resolver import SelectorRegistry
+
+    page = fake_page_factory(html="<html></html>")
+    identity = build_identity(account_id="acc-2", first_name="A", last_name="B", city_state="Austin, TX", zip_code="78701")
+    out = await fill_extra_form(page, SelectorRegistry({}), identity, avatar_path=None)
+    assert out == {}

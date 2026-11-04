@@ -165,7 +165,7 @@ class WarmingRunner:
         self.settings = settings
         self.generator = generator or ReviewGenerator()
 
-    async def run_session(self, ctx, *, budget: DailyBudget, empty: bool = False) -> dict[str, Any]:
+    async def run_session(self, ctx, *, budget: DailyBudget, empty: bool = False, max_seconds: int = 720) -> dict[str, Any]:
         page = ctx.data["browser"].page
         started = datetime.now(timezone.utc)
         actions: list[str] = []
@@ -175,7 +175,7 @@ class WarmingRunner:
             return {"actions": ["empty"], "duration_s": (datetime.now(timezone.utc) - started).total_seconds()}
 
         try:
-            while (datetime.now(timezone.utc) - started).total_seconds() < 12 * 60:
+            while (datetime.now(timezone.utc) - started).total_seconds() < max_seconds:
                 if page.is_closed():
                     break
                 status = await self._step(page, ctx, budget)

@@ -79,3 +79,18 @@ Cả `NastaseZelek4415@hotmail.com` và `GodwinSarinana242@hotmail.com` đều t
 Graph đọc mail hoạt động lúc đầu, sau đó token refresh bị từ chối hoàn toàn.
 Không thể verify email cho tới khi có mailbox khác hoặc tài khoản được mở khoá.
 Adapter đã tách biệt provider nên chỉ cần đổi `email.provider` + credential trong `.env`.
+
+## D-11 - Email verification is not blocking
+
+Live runs (2026-11-04) show Yelp creates the account and opens the profile form right after
+submit, but never sends a confirmation email to the alias (inbox + junk empty while a probe
+sent to the same alias is delivered). `EMAIL_PENDING` therefore returns `{"mail": "not_received"}`
+and `EMAIL_VERIFIED` proves the session by logging in with the stored credential (E-44).
+Only a failed login quarantines the account (`reauth_failed`).
+
+## D-12 - Profile completion is best effort
+
+Avatar (random photo from a public source), gender/pronoun, location and birthday are filled
+whenever the corresponding selector exists; misses are logged as `profile_step_failed` and never
+abort the flow (E-49). Address fields are derived from the proxy geo/zip, birthday is generated
+per account seed (25-48 years old).

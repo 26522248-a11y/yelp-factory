@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+from pathlib import Path
 import time
 import uuid
 from datetime import datetime, timezone
@@ -526,16 +527,12 @@ class SignupFlow:
                     persona.email_alias, timeout_s=self.settings.email.poll_timeout_s
                 )
         except NoVerificationMail:
-            # E-06: one resend, then quarantine.
-            if ctx.bump("email_resend") > 2:
-                raise NoVerificationMail("no verification mail after resend", code="no_email")
-            await asyncio.sleep(self.settings.email.resend_wait_s)
-            try:
-                mail = await self.email.wait_for_verification(
-                    persona.email_alias, timeout_s=self.settings.email.poll_timeout_s
-                )
-            except NoVerificationMail as exc:
-                raise NoVerificationMail(str(exc), code="no_email") from exc
+            # Yelp often skips the confirmation mail on this flow; do not stall the account.
+            # EMAIL_VERIFIED will prove the session by logging in with the stored credential
+            # (E-44) and only that failure is fatal.
+            log.warning("verification_mail_missing", email=persona.email_alias)
+            self._cancel_mail_task(ctx)
+            return {"mail": "not_received"}
 
         page = self._page(ctx)
         if mail.message.looks_expired():
@@ -577,13 +574,38 @@ class SignupFlow:
         persona: Persona = ctx.data["persona"]
         steps = 0
 
-        # Post-submit "Complete your profile" form: phone is optional, gender optional.
+        from flows.identity import build_identity, fetch_avatar
+        from flows.profile_settings import fill_birthday, fill_extra_form, fill_location
+
+        identity = ctx.data.get("identity")
+        if identity is None:
+            probe = ctx.data.get("proxy_probe")
+            identity = build_identity(
+                account_id=persona.email_alias,
+                first_name=persona.first_name,
+                last_name=persona.last_name,
+                city_state=persona.city,
+                zip_code=persona.zip,
+                geo_city=getattr(probe, "city", None),
+            )
+            ctx.data["identity"] = identity
+        avatar_path = ctx.data.get("avatar_path")
+        if avatar_path is None:
+            avatar_path = await fetch_avatar(Path(self.settings.artifacts_dir) / f"avatar_{ctx.account_id}.jpg", gender=identity.gender)
+            ctx.data["avatar_path"] = avatar_path
+
+        completed: dict[str, Any] = {}
         extra_save = await self.registry.find(page, "onboarding.extra_form_save", required=False, timeout_ms=4000)
         if extra_save is not None:
+            # Avatar + gender go into the extra form, then Save & Continue.
+            completed.update(await fill_extra_form(page, self.registry, identity, avatar_path) or {})
             await human_click(page, extra_save, dwell=(350, 900))
             await page.wait_for_load_state("domcontentloaded", timeout=30_000)
             await idle(page, 1.0, 2.5)
             steps += 1
+
+        completed.update(await fill_location(page, self.registry, identity) or {})
+        completed.update(await fill_birthday(page, self.registry, identity) or {})
 
         while steps < 5:
             element = await self.registry.find(page, "onboarding.skip", required=False, timeout_ms=2500)
@@ -605,7 +627,7 @@ class SignupFlow:
                 await human_click(page, save)
 
         await scroll_page(page, steps=2)
-        return {"onboarding_steps": steps, "city": persona.city}
+        return {"onboarding_steps": steps, "city": persona.city, "profile": completed}
 
     async def _enter_active(self, ctx: StageContext) -> dict[str, Any]:
         browser = ctx.data.get("browser")

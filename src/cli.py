@@ -49,6 +49,18 @@ def _deps(settings):
     )
 
 
+def cmd_warm(args) -> int:
+    import uuid as _uuid
+
+    from core.orchestrator import run_warm
+
+    settings = get_settings()
+    deps = _deps(settings)
+    result = asyncio.run(run_warm(_uuid.UUID(args.account), deps, sessions=args.sessions, max_seconds=args.minutes * 60))
+    _print(result)
+    return 0
+
+
 def cmd_resume(args) -> int:
     import uuid as _uuid
 
@@ -213,6 +225,12 @@ def build_parser() -> argparse.ArgumentParser:
     resume.add_argument("--account", required=True)
     resume.add_argument("--proxy", default=None)
     resume.set_defaults(func=cmd_resume)
+
+    warm = sub.add_parser("warm", help="run warming sessions for an ACTIVE account")
+    warm.add_argument("--account", required=True)
+    warm.add_argument("--sessions", type=int, default=1)
+    warm.add_argument("--minutes", type=int, default=12)
+    warm.set_defaults(func=cmd_warm)
 
     report = sub.add_parser("report", help="aggregate numbers for a time window")
     report.add_argument("--since", default="24h")

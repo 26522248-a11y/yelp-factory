@@ -20,7 +20,7 @@ proxy:
 email:
   provider: ms_graph
   domains: ["fviainboxes.com"]
-  poll_timeout_s: 180
+  poll_timeout_s: 90
   resend_wait_s: 60
   graph_client_id: "9e5f94bc-e8a4-4e73-b8be-63364c29d753"
   graph_tenant: consumers
