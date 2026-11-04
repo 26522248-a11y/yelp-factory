@@ -74,6 +74,16 @@ onboarding.skip:
   - { strategy: text, value: "Skip for now", priority: 2 }
   - { strategy: text, value: "Next", priority: 3 }
 
+onboarding.extra_form_save:
+  - { strategy: css, value: "button#extra-form-save", priority: 1 }
+  - { strategy: text, value: "Save & Continue", priority: 2 }
+
+onboarding.extra_phone:
+  - { strategy: css, value: "input#phone_number", priority: 1 }
+
+onboarding.extra_form:
+  - { strategy: css, value: "form#extra-form", priority: 1 }
+
 onboarding.avatar:
   - { strategy: css, value: "input[type='file'][name*='photo']", priority: 1 }
   - { strategy: css, value: "input[type='file']", priority: 2 }

@@ -40,8 +40,6 @@ def _deps(settings):
             sms_provider = HupSmsProvider(
                 settings.sms.api_key,
                 service_id=settings.sms.service_id,
-                status_path=settings.sms.status_path,
-                cancel_path=settings.sms.cancel_path,
                 timeout_s=settings.sms.timeout_s,
             )
         else:
@@ -49,6 +47,18 @@ def _deps(settings):
     return SignupDeps(
         settings=settings, gpm=gpm, registry=registry, email=email_provider, captcha=captcha, sms=sms_provider
     )
+
+
+def cmd_resume(args) -> int:
+    import uuid as _uuid
+
+    from core.orchestrator import resume_account
+
+    settings = get_settings()
+    deps = _deps(settings)
+    state = asyncio.run(resume_account(_uuid.UUID(args.account), deps, raw_proxy=args.proxy))
+    _print({"account": args.account, "state": state.value})
+    return 0 if state == __import__("db.models", fromlist=["AccountState"]).AccountState.ACTIVE else 1
 
 
 def cmd_gpm_health(args) -> int:
@@ -199,8 +209,12 @@ def build_parser() -> argparse.ArgumentParser:
     signup.add_argument("--dry-run", action="store_true")
     signup.set_defaults(func=cmd_signup)
 
-    report = sub.add_parser("report", help="aggregate numbers for a time window")
-    report.add_argument("--since", default="24h")
+    resume = sub.add_parser("resume", help="resume a crashed account from its last checkpoint")
+    resume.add_argument("--account", required=True)
+    resume.add_argument("--proxy", default=None)
+    resume.set_defaults(func=cmd_resume)
+
+    report = sub.add_parser("report", help="aggregate numbers for a time window")    report.add_argument("--since", default="24h")
     report.set_defaults(func=cmd_report)
 
     sub.add_parser("reap", help="clean locks, stuck runs, orphan profiles, old artifacts").set_defaults(func=cmd_reap)

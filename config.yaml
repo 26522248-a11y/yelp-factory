@@ -26,7 +26,8 @@ email:
   graph_tenant: consumers
   imap_host: "outlook.office365.com"
 sms:
-  provider: smsapi
+  provider: hup
+  service_id: 84
   country: US
   max_price: 0.35
 captcha:

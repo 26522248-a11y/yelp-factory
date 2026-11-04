@@ -70,8 +70,6 @@ class SMSConfig(BaseModel):
     api_key: str = ""
     # HupSMS service id (84 = Hotmail/Microsoft on Server 1; pick the target app's id).
     service_id: int = 84
-    status_path: str = "/rent/status"
-    cancel_path: str = "/rent/cancel"
     country: str = "US"
     max_price: float = 0.35
     timeout_s: int = 180

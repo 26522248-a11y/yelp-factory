@@ -87,11 +87,13 @@ class SignupFlow:
             Stage(AccountState.FORM_FILLED, self._enter_form_filled, retry=RetryPolicy(max_attempts=3, base_s=2)),
             Stage(AccountState.CAPTCHA_SOLVED, self._enter_captcha, retry=RetryPolicy(max_attempts=2)),
             Stage(AccountState.SUBMITTED, self._enter_submitted, retry=RetryPolicy(max_attempts=2, has_side_effect=True)),
+            # Reality (2026-11-04): Yelp shows the "complete your profile" form immediately after
+            # submit, before the email confirmation, so ONBOARDED runs before EMAIL_PENDING.
+            Stage(AccountState.ONBOARDED, self._enter_onboarded, retry=RetryPolicy(max_attempts=2)),
             Stage(AccountState.EMAIL_PENDING, self._enter_email_pending, retry=RetryPolicy(max_attempts=2, base_s=10)),
             Stage(AccountState.EMAIL_VERIFIED, self._enter_email_verified, retry=RetryPolicy(max_attempts=2)),
             Stage(AccountState.PHONE_PENDING, self._enter_phone_pending, retry=RetryPolicy(max_attempts=2, base_s=10)),
             Stage(AccountState.PHONE_VERIFIED, self._enter_phone_verified, retry=RetryPolicy(max_attempts=2)),
-            Stage(AccountState.ONBOARDED, self._enter_onboarded, retry=RetryPolicy(max_attempts=2)),
             Stage(AccountState.ACTIVE, self._enter_active, retry=RetryPolicy(max_attempts=1)),
         ]
     # ------------------------------------------------------------------ helpers
@@ -429,9 +431,11 @@ class SignupFlow:
             if errors:
                 self._cancel_mail_task(ctx)
                 raise YFError(f"submit rejected: {errors[:2]}", code="submit_error", meta={"errors": errors[:5]})
-            if "phone" in content and ("verify" in content or "confirm" in content):
+            if "extra-form" in content or "save & continue" in content or "phone number optional" in content:
+                # Post-submit profile page: phone is optional there, not an SMS challenge.
+                return {"next": "onboarding"}
+            if "phone" in content and ("verify your phone" in content or "we'll text" in content or "text you a code" in content):
                 return {"next": "phone"}
-
         # E-05: no signal in 45s -> one reload, then fail.
         await page.reload(wait_until="domcontentloaded", timeout=30_000)
         self._cancel_mail_task(ctx)
@@ -470,7 +474,23 @@ class SignupFlow:
 
             code_input = await self.registry.find(page, "phone.otp_input", required=False, timeout_ms=8000)
             if code_input is None:
-                # Passwordless: Yelp accepted the number without OTP.
+                # No OTP box: either Yelp accepted the number silently, or it rejected it.
+                still_form = await self.registry.find(page, "phone.phone_input", required=False, timeout_ms=1500)
+                try:
+                    content = (await page.content()).lower()
+                except Exception:  # noqa: BLE001
+                    content = ""
+                rejected = any(
+                    marker in content
+                    for marker in ("invalid phone", "valid phone number", "couldn't verify", "cannot be used", "not supported")
+                )
+                if still_form is not None or rejected:
+                    await self.sms.release(session)
+                    raise SMSError(
+                        f"Yelp rejected phone {session.phone_e164}",
+                        code="sms_fail",
+                        meta={"phone": session.phone_e164, "rejected": rejected},
+                    )
                 return {"phone": session.phone_e164, "otp_required": False}
             try:
                 code = await self.sms.wait_for_code(session, timeout_s=self.settings.sms.timeout_s)
@@ -556,6 +576,15 @@ class SignupFlow:
         page = self._page(ctx)
         persona: Persona = ctx.data["persona"]
         steps = 0
+
+        # Post-submit "Complete your profile" form: phone is optional, gender optional.
+        extra_save = await self.registry.find(page, "onboarding.extra_form_save", required=False, timeout_ms=4000)
+        if extra_save is not None:
+            await human_click(page, extra_save, dwell=(350, 900))
+            await page.wait_for_load_state("domcontentloaded", timeout=30_000)
+            await idle(page, 1.0, 2.5)
+            steps += 1
+
         while steps < 5:
             element = await self.registry.find(page, "onboarding.skip", required=False, timeout_ms=2500)
             if element is None:

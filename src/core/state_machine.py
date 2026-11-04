@@ -24,9 +24,11 @@ SIGNUP_ORDER: list[AccountState] = [
     AccountState.FORM_FILLED,
     AccountState.CAPTCHA_SOLVED,
     AccountState.SUBMITTED,
+    AccountState.ONBOARDED,
     AccountState.EMAIL_PENDING,
     AccountState.EMAIL_VERIFIED,
-    AccountState.ONBOARDED,
+    AccountState.PHONE_PENDING,
+    AccountState.PHONE_VERIFIED,
     AccountState.ACTIVE,
 ]
 
@@ -50,7 +52,7 @@ TRANSITIONS: dict[AccountState, set[AccountState]] = {
     AccountState.EMAIL_VERIFIED: {AccountState.ONBOARDED, AccountState.PHONE_PENDING, AccountState.DEAD},
     AccountState.PHONE_PENDING: {AccountState.PHONE_VERIFIED, AccountState.QUARANTINED, AccountState.DEAD},
     AccountState.PHONE_VERIFIED: {AccountState.ONBOARDED, AccountState.DEAD},
-    AccountState.ONBOARDED: {AccountState.ACTIVE, AccountState.DEAD},
+    AccountState.ONBOARDED: {AccountState.EMAIL_PENDING, AccountState.ACTIVE, AccountState.DEAD},
     AccountState.ACTIVE: {AccountState.WARMING, AccountState.RESTRICTED, AccountState.SUSPENDED},
     AccountState.WARMING: {AccountState.ACTIVE, AccountState.RESTRICTED, AccountState.SUSPENDED, AccountState.DEAD},
     AccountState.RESTRICTED: {AccountState.WARMING, AccountState.SUSPENDED, AccountState.DEAD},
@@ -131,6 +133,8 @@ class StateMachine:
             if state in (AccountState.EMAIL_PENDING, AccountState.EMAIL_VERIFIED) and wants_phone:
                 continue
             if state in (AccountState.PHONE_PENDING, AccountState.PHONE_VERIFIED) and not wants_phone:
+                continue
+            if state == AccountState.ONBOARDED and wants_phone:
                 continue
             stage = self._stage(state)
             if stage is None:

@@ -144,7 +144,7 @@ class GraphMailbox:
             {
                 "$top": top,
                 "$select": "id,subject,from,toRecipients,receivedDateTime,body",
-                "$orderby": "receivedDateTime desc",
+                # $orderby is not allowed together with $search on Graph.
                 "$search": f'"to:{alias}"',
             },
         )

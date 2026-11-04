@@ -56,7 +56,24 @@ async def test_happy_path_runs_all_stages():
     store = MemoryStore()
     final = await machine.run(ctx, store)
     assert final == AccountState.ACTIVE
-    assert executed == [s.value for s in SIGNUP_ORDER]
+    expected = [
+        s.value for s in SIGNUP_ORDER if s not in (AccountState.PHONE_PENDING, AccountState.PHONE_VERIFIED)
+    ]
+    assert executed == expected
+
+
+async def test_phone_path_runs_phone_stages():
+    """E-14: when Yelp asks for SMS, the phone stages run instead of the email ones."""
+    executed = []
+    stages = [Stage(state, lambda ctx, s=state: _run(ctx, executed, s)) for state in SIGNUP_ORDER]
+    machine = StateMachine(stages, persist=lambda *a, **k: None)
+    ctx = make_ctx()
+    ctx.data["next"] = "phone"
+    final = await machine.run(ctx, MemoryStore())
+    assert final == AccountState.ACTIVE
+    assert "PHONE_PENDING" in executed
+    assert "EMAIL_PENDING" not in executed
+    assert "ONBOARDED" not in executed
 
 
 async def test_resume_skips_completed_checkpoints():
@@ -69,7 +86,12 @@ async def test_resume_skips_completed_checkpoints():
     ctx = make_ctx(AccountState.FORM_FILLED)
     final = await machine.run(ctx, store)
     assert final == AccountState.ACTIVE
-    assert executed == [s.value for s in SIGNUP_ORDER[6:]]
+    expected = [
+        s.value
+        for s in SIGNUP_ORDER[6:]
+        if s not in (AccountState.PHONE_PENDING, AccountState.PHONE_VERIFIED)
+    ]
+    assert executed == expected
 
 
 async def test_quarantine_on_captcha_failure():

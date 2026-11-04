@@ -100,16 +100,12 @@ class HupSmsProvider:
         *,
         service_id: int = 84,
         base_url: str = "https://hupsms.com/api/v1",
-        status_path: str = "/rent/status",
-        cancel_path: str = "/rent/cancel",
-        timeout_s: int = 120,
+        timeout_s: int = 180,
         client: httpx.AsyncClient | None = None,
     ):
         self.api_key = api_key
         self.service_id = service_id
         self.base_url = base_url.rstrip("/")
-        self.status_path = status_path
-        self.cancel_path = cancel_path
         self.timeout_s = timeout_s
         self._client = client or httpx.AsyncClient(
             timeout=30, headers={"X-API-KEY": api_key, "Accept": "application/json"}
@@ -118,7 +114,16 @@ class HupSmsProvider:
     async def _get(self, path: str, params: dict | None = None) -> dict:
         # The docs authenticate with ?api_key=; the header is kept as a second factor.
         query = {"api_key": self.api_key, **(params or {})}
-        response = await self._client.get(f"{self.base_url}{path}", params=query)
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                response = await self._client.get(f"{self.base_url}{path}", params=query)
+                break
+            except httpx.HTTPError as exc:  # DNS blips and resets are common on VPS links
+                last_error = exc
+                await asyncio.sleep(1 + attempt * 2)
+        else:
+            raise SMSError(f"hup {path} network error: {last_error}", code="sms_api")
         if response.status_code == 404:
             raise SMSError(f"hup endpoint not found: {path}", code="sms_api")
         if response.status_code >= 400:
@@ -149,17 +154,13 @@ class HupSmsProvider:
     async def wait_for_code(self, session: SmsSession, *, timeout_s: int | None = None) -> str:
         deadline = time.monotonic() + (timeout_s or self.timeout_s)
         while time.monotonic() < deadline:
-            try:
-                data = await self._get(self.status_path, {"orderId": session.provider_id})
-            except SMSError as exc:
-                if exc.code == "sms_api":
-                    raise
-                data = {}
-            code = str(data.get("code") or data.get("otp") or "").strip()
-            if code:
-                return code
-            if data.get("status") in ("cancelled", "expired"):
-                raise SMSError(f"hup order {session.provider_id} {data.get('status')}")
+            data = await self._get(f"/check/{session.provider_id}")
+            otp = data.get("otp")
+            if otp:
+                return str(otp).strip()
+            state = str(data.get("status") or "").lower()
+            if state in ("cancelled", "expired"):
+                raise SMSError(f"hup order {session.provider_id} {state}", code="sms_expired")
             await asyncio.sleep(5)
         raise SMSError("hup sms timeout")
 
@@ -168,9 +169,18 @@ class HupSmsProvider:
 
     async def release(self, session: SmsSession) -> None:
         try:
-            await self._get(self.cancel_path, {"orderId": session.provider_id})
+            await self._get(f"/cancel/{session.provider_id}")
         except Exception:  # noqa: BLE001
             pass
+
+    async def rerent(self, phone_e164: str) -> SmsSession:
+        data = await self._get("/rerent", {"phone": phone_e164})
+        return SmsSession(
+            provider_id=str(data.get("orderId")),
+            phone_e164=_normalise_vn(str(data.get("phone", phone_e164))),
+            provider=self.name,
+            raw=data,
+        )
 
 
 def _normalise_vn(phone: str) -> str:

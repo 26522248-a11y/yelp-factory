@@ -52,8 +52,13 @@ async def test_wait_for_code_polls_until_ready():
 
     def handler(request):
         calls["n"] += 1
-        code = "123456" if calls["n"] >= 2 else ""
-        return httpx.Response(200, json={"status": "success", "data": {"code": code, "status": "waiting"}})
+        assert request.url.path.endswith("/check/HupSMSabc123")
+        if calls["n"] < 2:
+            return httpx.Response(200, json={"status": "success", "data": {"status": "pending", "otp": None}})
+        return httpx.Response(
+            200,
+            json={"status": "success", "data": {"status": "success", "otp": "123456", "smsContent": "123456 la ma"}},
+        )
 
     provider_ = provider(handler, timeout_s=10)
     session = type("S", (), {"provider_id": "HupSMSabc123"})()
@@ -90,3 +95,29 @@ async def test_business_error_is_surfaced():
     with pytest.raises(SMSError) as excinfo:
         await provider(handler).acquire()
     assert "INVALID_PARAMETERS" in str(excinfo.value)
+
+async def test_release_calls_cancel_endpoint():
+    called = {}
+
+    def handler(request):
+        called["path"] = request.url.path
+        return httpx.Response(200, json={"status": "success", "data": {"refund": 2000}})
+
+    provider_ = provider(handler)
+    session = type("S", (), {"provider_id": "HupSMSabc123"})()
+    await provider_.release(session)
+    assert called["path"].endswith("/cancel/HupSMSabc123")
+
+
+async def test_rerent_uses_phone_param():
+    def handler(request):
+        assert request.url.path.endswith("/rerent")
+        assert request.url.params["phone"] == "+84996203710"
+        return httpx.Response(
+            200,
+            json={"status": "success", "data": {"orderId": "HupSMSnew", "phone": "0996203710", "price": 2000}},
+        )
+
+    session = await provider(handler).rerent("+84996203710")
+    assert session.provider_id == "HupSMSnew"
+    assert session.phone_e164 == "+84996203710"
