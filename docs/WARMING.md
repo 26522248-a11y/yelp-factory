@@ -16,7 +16,7 @@ Mục tiêu: đưa tài khoản ACTIVE về trust cao nhất trước D+30.
 | Session rhythm: 90 phút giãn cách, nghỉ ngày thứ 7, 07:00–22:30 local | `core/scheduler.py` |
 | 1 account / proxy tại một thời điểm | `scheduler.due_sessions` (dedupe theo `proxy_ip`) |
 | 1 proxy ↔ 1–2 account | mỗi account có sessid riêng (`adapters/proxysession.py`), cấu hình `proxy.max_accounts` |
-| Avatar phong cảnh/chó mèo/meme | `flows/identity.py` (loremflickr → cataas → picsum → face fallback) |
+| Avatar phong cảnh/chó mèo/meme | `flows/identity.py` + `flows/avatar_sources.py` (pool scrape: Pinterest → Reddit → Wikimedia → IG/FB og:image → stock picsum/cataas) |
 | CLI kiểm tra | `yf trust --account <id>` |
 
 ## Phone
@@ -42,3 +42,19 @@ WHERE a.state IN ('ACTIVE','WARMING');
 - Ảnh review (upload photo) — cần pool ảnh tự chụp.
 - Báo cáo KPI tự động ra sheet/email.
 - Canary 14 ngày để tinh chỉnh ngưỡng trust.
+
+## Avatar pool (scrape)
+
+`flows/avatar_sources.py` gom ?nh t?: Pinterest (ideas + search, HTML scrape), Reddit public JSON,
+Wikimedia Commons API, Instagram/Facebook `og:image`, v� stock fallback (picsum, cataas).
+?nh h?p l? (image/*, 15 KB�6 MB, sha256 chua c�) du?c luu v�o `data/avatar_pool` + `index.json`,
+`fetch_avatar()` l?y t? pool tru?c khi g?i m?ng.
+
+T? IP hi?n t?i: **Pinterest, picsum, cataas tr? ?nh**; Reddit/Wikimedia/Unsplash/Pexels tr? 403,
+Instagram/Facebook tr? login wall � scraper t? b? qua v� d�ng ngu?n c�n l?i.
+
+L�m d?y pool:
+
+```powershell
+.\.venv\Scripts\python.exe -c "import asyncio; from flows.avatar_sources import refill_pool; print(asyncio.run(refill_pool(wanted=10)))"
+```

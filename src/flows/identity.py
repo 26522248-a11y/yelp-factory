@@ -86,9 +86,22 @@ def build_identity(
 
 
 async def fetch_avatar(dest: Path, *, gender: str | None = None, seed: str | None = None) -> Path | None:
-    """Download one photo from a public source; returns the local path or None."""
+    """Download one avatar; prefer the scraped pool, then live public sources."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     seed = seed or secrets.token_hex(6)
+
+    try:
+        from flows.avatar_sources import ensure_pool, pick_from_pool
+
+        await ensure_pool(minimum=5)
+        pooled = pick_from_pool()
+        if pooled is not None:
+            dest.write_bytes(pooled.read_bytes())
+            log.info("avatar_from_pool", file=pooled.name, bytes=pooled.stat().st_size)
+            return dest
+    except Exception as exc:  # noqa: BLE001 - pool is an optimisation, not a hard dependency
+        log.warning("avatar_pool_unavailable", error=str(exc)[:150])
+
     tag = random.choice(AVATAR_TAGS)
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     async with httpx.AsyncClient(timeout=45, follow_redirects=True, headers=headers, trust_env=False) as client:
