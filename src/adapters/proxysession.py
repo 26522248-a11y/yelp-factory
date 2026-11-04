@@ -19,10 +19,19 @@ def session_id_for(account_id: str) -> str:
 
 
 def rotate_session(raw: str, account_id: str, *, sticky_minutes: int = 30) -> str:
-    if "sessid-" not in raw:
-        return raw
+    """Give every account its own sticky exit IP.
+
+    Works for usernames that already carry ``sessid`` (replace) and for plain Oxylabs
+    usernames from Telegram exports (append the sticky parameters).
+    """
     replacement = f"sessid-{session_id_for(account_id)}-sesstime-{sticky_minutes}"
-    return SESSION_RE.sub(replacement, raw)
+    if "sessid-" in raw:
+        return SESSION_RE.sub(replacement, raw)
+    parts = raw.split(":", 3)
+    if len(parts) != 4 or not parts[2].startswith("customer-"):
+        return raw
+    host, port, username, password = parts
+    return f"{host}:{port}:{username}-{replacement}:{password}"
 
 
 def normalize(raw: str) -> str:

@@ -157,7 +157,27 @@ Cháº¡y tay má»™t account:
 yf trust --account <uuid>          # score + components + review eligibility
 yf warm --account <uuid> --minutes 6
 yf schedule --once --limit 4 --minutes 8
+yf profile --account <uuid>        # fill about-me, location, birthday
+yf profile --all                   # same for every ACTIVE/WARMING account
 ```
 
-Gate: <40 ch? browse, 40–59 thêm save/xem ?nh, 60–74 thêm vote/follow, >=75 m?i du?c review
-(kèm age >= 11 ngày, >= 6 session/7 ngày, không filter trong 7 ngày). Chi ti?t: `docs/WARMING.md`.
+Gate: <40 ch? browse, 40ï¿½59 thï¿½m save/xem ?nh, 60ï¿½74 thï¿½m vote/follow, >=75 m?i du?c review
+(kï¿½m age >= 11 ngï¿½y, >= 6 session/7 ngï¿½y, khï¿½ng filter trong 7 ngï¿½y). Chi ti?t: `docs/WARMING.md`.
+
+## 10. Import email / proxy pool
+
+Format email (m?i dï¿½ng): `mailbox|password|refresh_token|client_id|yelp_alias`
+Format proxy (m?i dï¿½ng): `host:port:user:pass` (h? tr? c? `http://user:pass@host:port`).
+
+```powershell
+yf import-emails --file data\emails.txt --dry-run
+yf import-emails --file data\emails.txt
+yf import-proxies --file data\proxies.txt
+yf pool --list
+
+# ï¿½ang kï¿½ theo d? li?u dï¿½ import
+yf signup --count 2 --source pool_both --max-per-proxy 2
+```
+
+Quy t?c: email ch? dï¿½ng 1 l?n; m?i proxy t?i da 2 account; job fail tru?c khi t?o account s? tr? email v? `available`.
+API: `GET /api/pool`, `POST /api/pool/import` (bearer token), body `{kind, text, dry_run}`.

@@ -101,6 +101,8 @@ class Account(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
     profile_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("profiles.id"))
+    email_pool_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("email_pool.id"))
+    proxy_pool_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("proxy_pool.id"))
     email: Mapped[str] = mapped_column(String(320), nullable=False)
     email_password_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
     email_alias: Mapped[str | None] = mapped_column(String(320))
@@ -349,4 +351,51 @@ class ReviewAttempt(Base):
     status: Mapped[str] = mapped_column(String(24), default="submitted")
     checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     filtered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# --------------------------------------------------------------------------------------
+# Imported pools (email / proxy) - spec v1.1
+# --------------------------------------------------------------------------------------
+
+
+class EmailPool(Base):
+    __tablename__ = "email_pool"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    mailbox_email: Mapped[str] = mapped_column(String(320), unique=True, nullable=False)
+    mailbox_password_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
+    refresh_token_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
+    client_id: Mapped[str] = mapped_column(String(120), nullable=False)
+    alias: Mapped[str] = mapped_column(String(320), unique=True, nullable=False)
+    domain: Mapped[str | None] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(24), default="available", nullable=False)
+    last_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(String(300))
+    source_file: Mapped[str | None] = mapped_column(String(300))
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    reserved_by: Mapped[uuid.UUID | None] = mapped_column()
+    reserved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ProxyPool(Base):
+    __tablename__ = "proxy_pool"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    raw: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    host: Mapped[str] = mapped_column(String(255), nullable=False)
+    port: Mapped[int] = mapped_column(Integer, nullable=False)
+    username: Mapped[str] = mapped_column(String(255), nullable=False)
+    password_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
+    kind: Mapped[str] = mapped_column(String(32), default="residential")
+    country: Mapped[str | None] = mapped_column(String(2))
+    city: Mapped[str | None] = mapped_column(String(120))
+    status: Mapped[str] = mapped_column(String(24), default="available", nullable=False)
+    accounts_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    ip: Mapped[str | None] = mapped_column(String(64))
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    last_probe_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source_file: Mapped[str | None] = mapped_column(String(300))
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    reserved_by: Mapped[uuid.UUID | None] = mapped_column()
+    reserved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

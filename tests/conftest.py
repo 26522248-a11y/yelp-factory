@@ -58,6 +58,46 @@ def run_id() -> uuid.UUID:
     return uuid.uuid4()
 
 
+@pytest.fixture()
+def clean_pool(db_ready):
+    """Remove pool rows created by tests (imported without a source file)."""
+    yield
+    from sqlalchemy import delete, or_
+
+    from db.models import EmailPool, ProxyPool
+    from db.session import session_scope
+
+    with session_scope() as session:
+        session.execute(delete(EmailPool).where(or_(EmailPool.source_file.is_(None), EmailPool.source_file == "")))
+        session.execute(delete(ProxyPool).where(or_(ProxyPool.source_file.is_(None), ProxyPool.source_file == "")))
+
+
+@pytest.fixture()
+def isolate_pool(db_ready):
+    """Park real pool rows as 'disabled' so allocation tests only see their own rows."""
+    from db.models import EmailPool, ProxyPool
+    from db.session import session_scope
+
+    saved = {"email": [], "proxy": []}
+    with session_scope() as session:
+        for row in session.query(EmailPool).all():
+            saved["email"].append((row.id, row.status))
+            row.status = "disabled"
+        for row in session.query(ProxyPool).all():
+            saved["proxy"].append((row.id, row.status))
+            row.status = "disabled"
+    yield
+    with session_scope() as session:
+        for row_id, status in saved["email"]:
+            row = session.get(EmailPool, row_id)
+            if row is not None:
+                row.status = status
+        for row_id, status in saved["proxy"]:
+            row = session.get(ProxyPool, row_id)
+            if row is not None:
+                row.status = status
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "db: requires a live Postgres")
 

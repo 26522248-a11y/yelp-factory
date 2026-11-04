@@ -130,6 +130,51 @@ def cmd_warm(args) -> int:
     return 0
 
 
+def cmd_profile(args) -> int:
+    import uuid as _uuid
+
+    from sqlalchemy import select
+
+    from core.orchestrator import run_profile_completion
+    from db.models import Account, AccountState
+    from db.session import session_scope
+
+    settings = get_settings()
+    deps = _deps(settings)
+    if args.all:
+        with session_scope() as session:
+            ids = list(
+                session.scalars(
+                    select(Account.id)
+                    .where(
+                        Account.state.in_(
+                            (AccountState.ACTIVE.value, AccountState.WARMING.value, AccountState.ONBOARDED.value)
+                        ),
+                        Account.substate.is_distinct_from("profile_completed"),
+                    )
+                    .order_by(Account.created_at)
+                )
+            )
+    else:
+        ids = [_uuid.UUID(args.account)]
+
+    async def run_all():
+        semaphore = asyncio.Semaphore(max(1, args.concurrency))
+
+        async def one(account_id):
+            async with semaphore:
+                try:
+                    return await run_profile_completion(account_id, deps)
+                except Exception as exc:  # noqa: BLE001
+                    return {"account": str(account_id), "error": str(exc)[:200]}
+
+        return await asyncio.gather(*(one(account_id) for account_id in ids))
+
+    results = list(asyncio.run(run_all())) if ids else []
+    _print({"count": len(results), "results": results})
+    return 0
+
+
 def cmd_resume(args) -> int:
     import uuid as _uuid
 
@@ -140,6 +185,81 @@ def cmd_resume(args) -> int:
     state = asyncio.run(resume_account(_uuid.UUID(args.account), deps, raw_proxy=args.proxy))
     _print({"account": args.account, "state": state.value})
     return 0 if state == __import__("db.models", fromlist=["AccountState"]).AccountState.ACTIVE else 1
+
+
+def cmd_import_emails(args) -> int:
+    from core.importers import parse_emails, read_file
+    from core.pool import import_emails
+    from db.models import EmailPool
+    from db.session import session_scope
+
+    settings = get_settings()
+    text = read_file(args.file)
+    with session_scope() as session:
+        existing = {row.mailbox_email for row in session.query(EmailPool).all()} | {row.alias for row in session.query(EmailPool).all()}
+    report = parse_emails(
+        text,
+        default_client_id=args.client_id or settings.email.graph_client_id,
+        default_domain=args.domain or settings.email.domains[0],
+        existing=existing,
+    )
+    result = {"total": report.total, "valid": len(report.rows), "duplicates": report.duplicates, "invalid": len(report.errors)}
+    if report.errors:
+        result["errors"] = [{"line": e.line, "reason": e.reason, "row": e.raw} for e in report.errors]
+    if args.dry_run:
+        _print({**result, "dry_run": True})
+        return 0
+    if report.rows:
+        result.update(import_emails(report.rows, source_file=str(args.file)))
+    _print(result)
+    return 0 if report.rows else 1
+
+
+def cmd_import_proxies(args) -> int:
+    from core.importers import parse_proxies, read_file
+    from core.pool import import_proxies
+    from db.models import ProxyPool
+    from db.session import session_scope
+
+    text = read_file(args.file)
+    with session_scope() as session:
+        existing = {row.raw for row in session.query(ProxyPool).all()}
+    report = parse_proxies(text, existing=existing)
+    result = {"total": report.total, "valid": len(report.rows), "duplicates": report.duplicates, "invalid": len(report.errors)}
+    if report.errors:
+        result["errors"] = [{"line": e.line, "reason": e.reason, "row": e.raw} for e in report.errors]
+    if args.dry_run:
+        _print({**result, "dry_run": True})
+        return 0
+    if report.rows:
+        result.update(import_proxies(report.rows, source_file=str(args.file)))
+    _print(result)
+    return 0 if report.rows else 1
+
+
+def cmd_pool(args) -> int:
+    from core.pool import stats
+    from db.models import EmailPool, ProxyPool
+    from db.session import session_scope
+
+    payload = stats()
+    if args.list:
+        with session_scope() as session:
+            payload["email_rows"] = [
+                {"alias": row.alias, "mailbox": row.mailbox_email, "status": row.status}
+                for row in session.query(EmailPool).order_by(EmailPool.imported_at.desc()).limit(args.limit).all()
+            ]
+            payload["proxy_rows"] = [
+                {
+                    "raw": f"{row.host}:{row.port}:{row.username}:***",
+                    "status": row.status,
+                    "accounts": row.accounts_count,
+                    "ip": row.ip,
+                }
+                for row in session.query(ProxyPool).order_by(ProxyPool.imported_at.desc()).limit(args.limit).all()
+            ]
+    _print(payload)
+    return 0
 
 
 def cmd_gpm_health(args) -> int:
@@ -170,13 +290,44 @@ def cmd_gpm_list(args) -> int:
 
 def cmd_signup(args) -> int:
     from core.orchestrator import create_account, run_batch
+    from flows.geo import resolve_target_city
 
     settings = get_settings()
-    city = args.city or settings.target.cities[0]
+    city = args.city
+    probe_result = None
+    auto_city = not city or city.lower() == "auto"
+    pool_proxy_source = args.source in ("pool_proxy", "pool_both")
+    if auto_city:
+        if pool_proxy_source:
+            # Every account probes its own pool proxy right before it is created.
+            city = settings.target.cities[0]
+        else:
+            # City is derived from the proxy IP, not typed by the operator.
+            city, probe_result = asyncio.run(
+                resolve_target_city(
+                    settings.proxy.default_raw,
+                    fallback=settings.target.cities[0],
+                    country=settings.target.country,
+                )
+            )
     domain = args.domain or settings.email.domains[0]
     deps = _deps(settings)
-    account_ids = [create_account(city, domain) for _ in range(args.count)]
-    log.info("signup_batch_started", count=len(account_ids), city=city, dry_run=args.dry_run)
+    account_ids = []
+    try:
+        for _ in range(args.count):
+            account_ids.append(
+                create_account(
+                    city,
+                    domain,
+                    source=args.source,
+                    max_per_proxy=args.max_per_proxy,
+                    probe_city=auto_city and pool_proxy_source,
+                )
+            )
+    except RuntimeError as exc:
+        _print({"error": str(exc), "created": [str(a) for a in account_ids]})
+        return 2
+    log.info("signup_batch_started", count=len(account_ids), city=city, dry_run=args.dry_run, source=args.source)
     if args.dry_run:
         _print({"created": [str(a) for a in account_ids], "dry_run": True})
         return 0
@@ -281,12 +432,35 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("gpm-health", help="check GPM app + count profiles").set_defaults(func=cmd_gpm_health)
     sub.add_parser("gpm-list", help="list GPM profiles").set_defaults(func=cmd_gpm_list)
 
+    import_emails = sub.add_parser("import-emails", help="import email|password|token|client_id|alias lines")
+    import_emails.add_argument("--file", required=True)
+    import_emails.add_argument("--client-id", default=None)
+    import_emails.add_argument("--domain", default=None)
+    import_emails.add_argument("--dry-run", action="store_true")
+    import_emails.set_defaults(func=cmd_import_emails)
+
+    import_proxies = sub.add_parser("import-proxies", help="import host:port:user:pass lines")
+    import_proxies.add_argument("--file", required=True)
+    import_proxies.add_argument("--dry-run", action="store_true")
+    import_proxies.set_defaults(func=cmd_import_proxies)
+
+    pool = sub.add_parser("pool", help="email/proxy pool statistics")
+    pool.add_argument("--list", action="store_true")
+    pool.add_argument("--limit", type=int, default=20)
+    pool.set_defaults(func=cmd_pool)
+
     signup = sub.add_parser("signup", help="create accounts and run the signup flow")
     signup.add_argument("--count", type=int, default=1)
-    signup.add_argument("--city", default=None)
+    signup.add_argument("--city", default=None, help="auto (default) = derive from proxy IP")
     signup.add_argument("--domain", default=None)
     signup.add_argument("--proxy", default=None)
     signup.add_argument("--concurrency", type=int, default=1)
+    signup.add_argument(
+        "--source",
+        choices=["auto", "pool_email", "pool_proxy", "pool_both"],
+        default="auto",
+    )
+    signup.add_argument("--max-per-proxy", type=int, default=2)
     signup.add_argument("--dry-run", action="store_true")
     signup.set_defaults(func=cmd_signup)
 
@@ -300,6 +474,12 @@ def build_parser() -> argparse.ArgumentParser:
     warm.add_argument("--sessions", type=int, default=1)
     warm.add_argument("--minutes", type=int, default=12)
     warm.set_defaults(func=cmd_warm)
+
+    profile = sub.add_parser("profile", help="fill every optional Yelp profile field")
+    profile.add_argument("--account", default=None)
+    profile.add_argument("--all", action="store_true")
+    profile.add_argument("--concurrency", type=int, default=2)
+    profile.set_defaults(func=cmd_profile)
 
     schedule = sub.add_parser("schedule", help="plan and run due warming sessions")
     schedule.add_argument("--once", action="store_true", help="single pass, then exit")

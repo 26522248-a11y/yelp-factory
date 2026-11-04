@@ -107,16 +107,29 @@ def backfill(session) -> int:
     for account in session.query(Account).all():
         changed = False
         identity = _identity_for(session, account) or _build_identity(account)
+
+        # The account row is authoritative for city/state/ZIP (resolved from the proxy at
+        # creation); step metadata may carry a different rotating mobile exit city.
+        parts = (account.city or "").split(",")
+        city = parts[0].strip() if parts else ""
+        state = parts[-1].strip() if len(parts) > 1 else identity.get("state", "")
+        if city:
+            identity["city"] = city
+            identity["state"] = state
+            identity["zip"] = account.zip or identity.get("zip", "")
+
         if not account.gender and identity.get("gender"):
             account.gender = identity["gender"]
             changed = True
         if not account.birth_date and identity.get("birth_date"):
             account.birth_date = identity["birth_date"]
             changed = True
-        if not account.address_line and identity.get("street"):
-            account.address_line = (
-                f"{identity['street']}, {identity.get('city', '')}, {identity.get('state', '')} {identity.get('zip', '')}"
-            ).strip(", ")
+        expected_address = (
+            f"{identity.get('street', '')}, {identity.get('city', '')}, "
+            f"{identity.get('state', '')} {identity.get('zip', '')}"
+        ).strip(", ")
+        if identity.get("street") and account.address_line != expected_address:
+            account.address_line = expected_address
             changed = True
         proxy_ip = _proxy_ip_for(session, account)
         if proxy_ip and not account.proxy_ip:

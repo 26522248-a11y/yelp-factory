@@ -186,12 +186,19 @@ def _safe(data: dict[str, Any]) -> dict[str, Any]:
 
     from obs.redact import redact_obj
 
+    # Runtime handles (Playwright browser/page) cannot be serialised nor deep-copied;
+    # they are rebuilt from the GPM profile on resume, so they never enter checkpoints.
+    runtime = {"browser", "start_result"}
+
     # ctx.data chứa dataclass (Persona, Identity, ProxyTarget) lẫn bytes; JSONB chỉ nhận JSON.
     def _default(value: Any) -> Any:
-        if dataclasses.is_dataclass(value):
-            return dataclasses.asdict(value)
+        if dataclasses.is_dataclass(value) and not isinstance(value, type):
+            # Shallow conversion: dataclasses.asdict() deep-copies values, which explodes
+            # on Playwright/asyncio objects ("cannot pickle '_queue.SimpleQueue'").
+            return {field.name: getattr(value, field.name) for field in dataclasses.fields(value)}
         if isinstance(value, bytes):
             return value.decode("utf-8", "ignore")
         return str(value)
 
-    return json.loads(json.dumps(redact_obj(data), default=_default))
+    payload = {key: value for key, value in data.items() if key not in runtime}
+    return json.loads(json.dumps(redact_obj(payload), default=_default))

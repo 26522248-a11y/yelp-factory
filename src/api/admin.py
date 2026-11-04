@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import Response
+from pydantic import BaseModel
 
-from api.schemas import HealthResponse, ReportResponse, SignupRequest
+from api.schemas import HealthResponse, PoolImportRequest, ReportResponse, SignupRequest
 from core.config import get_settings
 from core.governor import Governor
 from core.report import build_report, recent_events
@@ -62,6 +63,58 @@ def create_app() -> FastAPI:
         from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+    # ------------------------------------------------------------------ pools (spec v1.1)
+
+    @app.get("/api/pool", dependencies=[Depends(_auth)])
+    def pool_stats():
+        from core.pool import stats
+
+        return stats()
+
+    @app.post("/api/pool/import", dependencies=[Depends(_auth)])
+    def pool_import(payload: PoolImportRequest):
+        from core.importers import parse_emails, parse_proxies
+        from core.pool import import_emails, import_proxies
+        from db.models import EmailPool, ProxyPool
+        from db.session import session_scope
+
+        settings = get_settings()
+        with session_scope() as session:
+            if payload.kind == "emails":
+                existing = {row.mailbox_email for row in session.query(EmailPool).all()} | {
+                    row.alias for row in session.query(EmailPool).all()
+                }
+            elif payload.kind == "proxies":
+                existing = {row.raw for row in session.query(ProxyPool).all()}
+            else:
+                raise HTTPException(status_code=400, detail="kind must be emails|proxies")
+
+        if payload.kind == "emails":
+            report = parse_emails(
+                payload.text,
+                default_client_id=settings.email.graph_client_id,
+                default_domain=settings.email.domains[0],
+                existing=existing,
+            )
+            if not payload.dry_run and report.rows:
+                import_emails(report.rows, source_file="api")
+        else:
+            report = parse_proxies(payload.text, existing=existing)
+            if not payload.dry_run and report.rows:
+                import_proxies(report.rows, source_file="api")
+
+        return {
+            "kind": payload.kind,
+            "total": report.total,
+            "valid": len(report.rows),
+            "duplicates": report.duplicates,
+            "invalid": len(report.errors),
+            "errors": [
+                {"line": error.line, "reason": error.reason, "row": error.raw} for error in report.errors
+            ],
+            "dry_run": payload.dry_run,
+        }
 
     return app
 

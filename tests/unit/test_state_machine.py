@@ -121,6 +121,29 @@ def test_pending_states_are_the_only_replayable_ones():
     assert AccountState.SUBMITTED not in replayable
 
 
+def test_safe_drops_runtime_handles_and_unpicklable_values():
+    """Regression: dataclasses.asdict() deep-copied Playwright → '_queue.SimpleQueue'."""
+    import queue
+    from dataclasses import dataclass
+
+    from core.state_machine import _safe
+
+    @dataclass
+    class Handle:
+        payload: object
+
+    data = {
+        "persona": {"first_name": "Amanda"},
+        "browser": Handle(queue.SimpleQueue()),
+        "start_result": Handle(queue.SimpleQueue()),
+        "extra": Handle(queue.SimpleQueue()),
+    }
+    safe = _safe(data)
+    assert safe["persona"]["first_name"] == "Amanda"
+    assert "browser" not in safe and "start_result" not in safe
+    assert isinstance(safe["extra"]["payload"], str)
+
+
 async def _run(ctx, executed, state):
     executed.append(state.value)
     return {}

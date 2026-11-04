@@ -35,11 +35,56 @@ class SignupDeps:
     artifacts: object = None
 
 
-def create_account(city: str, domain: str, *, box: SecretBox | None = None) -> uuid.UUID:
-    persona = build_persona(city, domain)
+def create_account(
+    city: str,
+    domain: str,
+    *,
+    box: SecretBox | None = None,
+    source: str = "auto",
+    max_per_proxy: int = 2,
+    probe_city: bool = False,
+) -> uuid.UUID:
+    """Create one account row. ``source`` chooses generated vs imported email/proxy."""
+    from core.pool import reserve_email, reserve_proxy
+
     box = box or SecretBox()
+    account_id = uuid.uuid4()
+    pool_email = None
+    pool_proxy = None
+    if source in ("pool_email", "pool_both"):
+        pool_email = reserve_email(account_id)
+        if pool_email is None:
+            raise RuntimeError("pool_exhausted:email")
+    if source in ("pool_both", "pool_proxy"):
+        pool_proxy = reserve_proxy(account_id, max_per_proxy=max_per_proxy)
+        if pool_proxy is None:
+            from core.pool import release_email
+
+            if pool_email is not None:
+                release_email(pool_email.id)
+            raise RuntimeError("pool_exhausted:proxy")
+
+    if pool_proxy is not None and probe_city:
+        # The persona city/ZIP must match the exit IP or Yelp rejects the address.
+        from adapters.proxysession import rotate_session
+        from core.pool import proxy_raw
+        from flows.geo import resolve_target_city
+
+        try:
+            sticky = rotate_session(proxy_raw(pool_proxy), str(account_id))
+            city, _ = asyncio.run(resolve_target_city(sticky, fallback=city, country="US"))
+        except Exception as exc:  # noqa: BLE001 - probe is best effort
+            log.warning("pool_proxy_geo_failed", account_id=str(account_id), error=str(exc)[:150])
+
+    if pool_email is not None:
+        persona = build_persona(city, pool_email.domain or domain)
+        persona.email_alias = pool_email.alias
+    else:
+        persona = build_persona(city, domain)
+
     with session_scope() as session:
         account = Account(
+            id=account_id,
             email=persona.email_alias,
             email_alias=persona.email_alias,
             first_name=persona.first_name,
@@ -48,6 +93,8 @@ def create_account(city: str, domain: str, *, box: SecretBox | None = None) -> u
             city=persona.city,
             password_enc=box.encrypt(persona.password),
             state=AccountState.NEW.value,
+            email_pool_id=pool_email.id if pool_email else None,
+            proxy_pool_id=pool_proxy.id if pool_proxy else None,
         )
         session.add(account)
         session.flush()
@@ -84,19 +131,51 @@ async def run_signup(account_id: uuid.UUID, deps: SignupDeps, *, raw_proxy: str 
             persona.first_name = account.first_name
             persona.last_name = account.last_name
             persona.email_alias = account.email
+
+            # Imported pools take precedence over the generated defaults.
+            from core.mailbox_factory import provider_for_account
+            from core.pool import commit_email, commit_proxy, proxy_raw, release_email
+
+            email_provider = provider_for_account(account, settings, fallback=deps.email)
+            pool_proxy_raw = None
+            if account.proxy_pool_id:
+                from db.models import ProxyPool
+
+                with session_scope() as session:
+                    proxy_row = session.get(ProxyPool, account.proxy_pool_id)
+                    if proxy_row is not None:
+                        pool_proxy_raw = proxy_raw(proxy_row)
+            effective_proxy = pool_proxy_raw or raw_proxy
+
             store = CheckpointStore(run_id)
-            ctx = StageContext(account_id=account_id, run_id=run_id, state=AccountState(account.state), data={"persona": persona, "raw_proxy": raw_proxy})
+            ctx = StageContext(
+                account_id=account_id,
+                run_id=run_id,
+                state=AccountState(account.state),
+                data={"persona": persona, "raw_proxy": effective_proxy},
+            )
             flow = SignupFlow(
                 settings=settings,
                 gpm=deps.gpm,
                 registry=deps.registry,
-                email_provider=deps.email,
+                email_provider=email_provider,
                 captcha_chain=deps.captcha,
                 sms_provider=deps.sms,
                 artifacts=deps.artifacts,
             )
             machine = StateMachine(flow.stages())
             final = await machine.run(ctx, store)
+
+            # Pool bookkeeping: a created account consumes the email; the proxy is always
+            # consumed once the browser has been opened on it (the IP is already exposed).
+            if account.email_pool_id:
+                if final in (AccountState.ACTIVE, AccountState.WARMING, AccountState.ONBOARDED):
+                    commit_email(account.email_pool_id)
+                else:
+                    release_email(account.email_pool_id)
+            if account.proxy_pool_id:
+                commit_proxy(account.proxy_pool_id)
+
             close_run(run_id, RunState.DONE if final == AccountState.ACTIVE else RunState.FAILED,)
             signup_total.labels(result=final.value.lower()).inc()
             return final
@@ -146,6 +225,20 @@ async def resume_account(account_id: uuid.UUID, deps: SignupDeps, *, raw_proxy: 
             persona.first_name = account.first_name
             persona.last_name = account.last_name
             persona.email_alias = account.email
+
+            # Imported pools stay authoritative on resume too.
+            from core.mailbox_factory import provider_for_account
+            from core.pool import proxy_raw
+
+            email_provider = provider_for_account(account, settings, fallback=deps.email)
+            if account.proxy_pool_id:
+                from db.models import ProxyPool
+
+                with session_scope() as session:
+                    proxy_row = session.get(ProxyPool, account.proxy_pool_id)
+                    if proxy_row is not None:
+                        raw_proxy = proxy_raw(proxy_row) or raw_proxy
+
             ctx = StageContext(account_id=account_id, run_id=run_id, state=AccountState(account.state), data={"persona": persona, "raw_proxy": raw_proxy})
             state = AccountState(account.state)
 
@@ -194,13 +287,27 @@ async def resume_account(account_id: uuid.UUID, deps: SignupDeps, *, raw_proxy: 
                 settings=settings,
                 gpm=deps.gpm,
                 registry=deps.registry,
-                email_provider=deps.email,
+                email_provider=email_provider,
                 captcha_chain=deps.captcha,
                 sms_provider=deps.sms,
                 artifacts=deps.artifacts,
             )
             machine = StateMachine(flow.stages())
             final = await machine.run(ctx, store, start_from=state)
+
+            # Pool bookkeeping mirrors run_signup(): resume must consume/release the same rows.
+            if account.email_pool_id:
+                from core.pool import commit_email, release_email
+
+                if final in (AccountState.ACTIVE, AccountState.WARMING, AccountState.ONBOARDED):
+                    commit_email(account.email_pool_id)
+                else:
+                    release_email(account.email_pool_id)
+            if account.proxy_pool_id:
+                from core.pool import commit_proxy
+
+                commit_proxy(account.proxy_pool_id)
+
             close_run(run_id, RunState.DONE if final == AccountState.ACTIVE else RunState.FAILED)
             return final
     except YFError as exc:
@@ -474,6 +581,63 @@ async def upload_avatar(account_id: uuid.UUID, deps: SignupDeps, *, avatar_path:
             deps.gpm.stop_profile(gpm_profile_id)
         except Exception:  # noqa: BLE001
             pass
+
+
+async def run_profile_completion(account_id: uuid.UUID, deps: SignupDeps) -> dict:
+    """Fill every optional profile field (about me, location, birthday) on an existing account."""
+    from adapters.browser import attach
+    from db.models import Profile
+    from flows.identity import build_identity
+    from flows.profile_settings import fill_birthday, fill_profile_details
+
+    settings = deps.settings
+    account = load_account(account_id)
+    if account is None:
+        raise KeyError(account_id)
+    with session_scope() as session:
+        profile_row = session.query(Profile).filter(Profile.id == account.profile_id).one_or_none() if account.profile_id else None
+        gpm_profile_id = profile_row.gpm_profile_id if profile_row else None
+    if not gpm_profile_id:
+        raise RuntimeError("account has no GPM profile; run signup first")
+
+    identity = build_identity(
+        account_id=account.email or str(account_id),
+        first_name=account.first_name or "User",
+        last_name=account.last_name or "Yelp",
+        city_state=account.city or "Austin, TX",
+        zip_code=account.zip or "78701",
+    )
+    started = deps.gpm.start_profile(gpm_profile_id, window_size="1280,800", skip_proxy_check=True)
+    browser = await attach(started.cdp_url, timeout_s=settings.gpm.connect_timeout_s)
+    result: dict = {}
+    try:
+        page = await browser.adopt_page()
+        for step_name, step_coro in (
+            ("details", fill_profile_details(page, deps.registry, identity)),
+            ("birthday", fill_birthday(page, deps.registry, identity)),
+        ):
+            try:
+                result.update(await step_coro or {})
+            except Exception as exc:  # noqa: BLE001
+                log.warning("profile_step_skipped", step=step_name, error=str(exc)[:180])
+        if result:
+            with session_scope() as session:
+                row = session.get(Account, account_id)
+                if row is not None:
+                    row.substate = "profile_completed"
+                    row.gender = identity.gender
+                    row.birth_date = identity.birth_date.isoformat()
+                    row.address_line = identity.address_line()
+    finally:
+        try:
+            await browser.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            deps.gpm.stop_profile(gpm_profile_id)
+        except Exception:  # noqa: BLE001
+            pass
+    return {"account": str(account_id), "filled": result}
 
 
 async def run_warm(account_id: uuid.UUID, deps: SignupDeps, *, sessions: int = 1, max_seconds: int = 720) -> dict:

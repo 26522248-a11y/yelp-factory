@@ -362,6 +362,10 @@ class SignupFlow:
             await human_type(await self.registry.find(page, "signup.email"), persona.email_alias)
             await human_type(await self.registry.find(page, "signup.password"), persona.password)
             await human_type(await self.registry.find(page, "signup.postal_code"), persona.zip)
+            city_input = await self.registry.find(page, "signup.city", required=False, timeout_ms=2500)
+            if city_input is not None:
+                # Yelp asks for "City / Town" separately from the ZIP; fill both.
+                await human_type(city_input, persona.city.split(",")[0].strip())
             await idle(page, 0.4, 1.2)
 
             errors = await self._inline_errors(ctx)
@@ -608,18 +612,18 @@ class SignupFlow:
         steps = 0
 
         from flows.identity import build_identity, fetch_avatar
-        from flows.profile_settings import fill_birthday, fill_extra_form, fill_location
+        from flows.profile_settings import fill_birthday, fill_extra_form, fill_profile_details
 
         identity = ctx.data.get("identity")
         if identity is None:
-            probe = ctx.data.get("proxy_probe")
             identity = build_identity(
                 account_id=str(getattr(persona, "email_alias", ctx.account_id)),
                 first_name=getattr(persona, "first_name", "User"),
                 last_name=getattr(persona, "last_name", "Yelp"),
                 city_state=persona.city,
                 zip_code=getattr(persona, "zip", "33444"),
-                geo_city=getattr(probe, "city", None),
+                # persona.city was already resolved from this proxy; adding the raw probe
+                # city would mix e.g. "Farmingdale" with the ZIP/state of another city.
             )
             ctx.data["identity"] = identity
         avatar_path = ctx.data.get("avatar_path")
@@ -643,17 +647,28 @@ class SignupFlow:
             log.warning("identity_persist_failed", error=str(exc)[:160])
 
         completed: dict[str, Any] = {}
-        extra_save = await self.registry.find(page, "onboarding.extra_form_save", required=False, timeout_ms=4000)
-        if extra_save is not None:
-            # Avatar + gender go into the extra form, then Save & Continue.
-            completed.update(await fill_extra_form(page, self.registry, identity, avatar_path) or {})
-            await human_click(page, extra_save, dwell=(350, 900))
-            await page.wait_for_load_state("domcontentloaded", timeout=30_000)
-            await idle(page, 1.0, 2.5)
-            steps += 1
+        try:
+            extra_save = await self.registry.find(page, "onboarding.extra_form_save", required=False, timeout_ms=4000)
+            if extra_save is not None:
+                # Avatar + gender go into the extra form, then Save & Continue.
+                completed.update(await fill_extra_form(page, self.registry, identity, avatar_path) or {})
+                await human_click(page, extra_save, dwell=(350, 900))
+                await page.wait_for_load_state("domcontentloaded", timeout=30_000)
+                await idle(page, 1.0, 2.5)
+                steps += 1
+        except Exception as exc:  # noqa: BLE001
+            log.warning("profile_step_skipped", step="extra", error=str(exc)[:180])
 
-        completed.update(await fill_location(page, self.registry, identity) or {})
-        completed.update(await fill_birthday(page, self.registry, identity) or {})
+        # Everything below is optional for the account: a dead proxy mid-step must never
+        # quarantine an account Yelp already created (E-49).
+        for step_name, step_coro in (
+            ("details", fill_profile_details(page, self.registry, identity)),
+            ("birthday", fill_birthday(page, self.registry, identity)),
+        ):
+            try:
+                completed.update(await step_coro or {})
+            except Exception as exc:  # noqa: BLE001
+                log.warning("profile_step_skipped", step=step_name, error=str(exc)[:180])
 
         while steps < 5:
             element = await self.registry.find(page, "onboarding.skip", required=False, timeout_ms=2500)

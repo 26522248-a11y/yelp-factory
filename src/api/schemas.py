@@ -35,3 +35,9 @@ class QuarantineEntry(BaseModel):
     code: str
     created_at: str
     evidence: dict[str, Any] = {}
+
+
+class PoolImportRequest(BaseModel):
+    kind: str
+    text: str
+    dry_run: bool = False
