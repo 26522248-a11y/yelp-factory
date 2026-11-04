@@ -1,0 +1,156 @@
+# Selector registry - every DOM hook used by the flows lives here, never inline.
+# priority 1 = preferred. Resolver tries rules in priority order and logs hit/miss.
+
+cookie.accept:
+  - { strategy: css, value: "button#onetrust-accept-btn-handler", priority: 1 }
+  - { strategy: css, value: "button[aria-label*='Accept']", priority: 2 }
+  - { strategy: label, value: "Accept All", priority: 3 }
+  - { strategy: text, value: "Accept Cookies", priority: 4 }
+
+signup.open:
+  - { strategy: css, value: "a[href*='/signup']", priority: 1 }
+  - { strategy: text, value: "Sign up", priority: 2 }
+
+signup.first_name:
+  - { strategy: css, value: "input[name='first_name']", priority: 1 }
+  - { strategy: label, value: "First Name", priority: 2 }
+  - { strategy: placeholder, value: "First name", priority: 3 }
+
+signup.last_name:
+  - { strategy: css, value: "input[name='last_name']", priority: 1 }
+  - { strategy: label, value: "Last Name", priority: 2 }
+  - { strategy: placeholder, value: "Last name", priority: 3 }
+
+signup.email:
+  - { strategy: css, value: "input#email", priority: 1 }
+  - { strategy: css, value: "input[name='email']", priority: 2 }
+  - { strategy: label, value: "Email", priority: 3 }
+
+signup.password:
+  - { strategy: css, value: "input#password", priority: 1 }
+  - { strategy: css, value: "input[name='password']", priority: 2 }
+  - { strategy: label, value: "Password", priority: 3 }
+
+signup.postal_code:
+  - { strategy: css, value: "input#zip", priority: 1 }
+  - { strategy: css, value: "input[name='zip']", priority: 2 }
+  - { strategy: css, value: "input[name='postal_code']", priority: 3 }
+  - { strategy: label, value: "ZIP", priority: 4 }
+  - { strategy: placeholder, value: "ZIP Code", priority: 5 }
+
+signup.city:
+  - { strategy: css, value: "input#city", priority: 1 }
+  - { strategy: css, value: "input[name='city']", priority: 2 }
+  - { strategy: placeholder, value: "City / Town", priority: 3 }
+
+signup.submit:
+  - { strategy: css, value: "button#signup-button", priority: 1 }
+  - { strategy: css, value: "form#signup-form button[type='submit']", priority: 2 }
+  - { strategy: text, value: "Sign Up", priority: 3 }
+
+signup.inline_error:
+  - { strategy: css, value: ".input-error, .error-message, [role='alert']", priority: 1 }
+  - { strategy: css, value: "div[class*='error']", priority: 2 }
+
+signup.already_registered:
+  - { strategy: text, value: "already registered", priority: 1 }
+  - { strategy: text, value: "already have an account", priority: 2 }
+
+signup.page_shell:
+  - { strategy: css, value: "form#signup-form", priority: 1 }
+  - { strategy: css, value: "form[action*='signup'], form[data-testid*='signup']", priority: 2 }
+
+captcha.iframe:
+  - { strategy: css, value: "iframe[src*='recaptcha']", priority: 1 }
+  - { strategy: css, value: "iframe[src*='arkoselabs']", priority: 2 }
+  - { strategy: css, value: "iframe[src*='hcaptcha']", priority: 3 }
+
+verify.landing:
+  - { strategy: css, value: "[data-testid='verify-email'], .verify-email", priority: 1 }
+  - { strategy: text, value: "Verify your email", priority: 2 }
+
+onboarding.skip:
+  - { strategy: text, value: "Skip", priority: 1 }
+  - { strategy: text, value: "Skip for now", priority: 2 }
+  - { strategy: text, value: "Next", priority: 3 }
+
+onboarding.avatar:
+  - { strategy: css, value: "input[type='file'][name*='photo']", priority: 1 }
+  - { strategy: css, value: "input[type='file']", priority: 2 }
+
+onboarding.city:
+  - { strategy: css, value: "input[name='city']", priority: 1 }
+  - { strategy: label, value: "City", priority: 2 }
+
+onboarding.city_option:
+  - { strategy: css, value: "[role='option']", priority: 1 }
+
+onboarding.business_card:
+  - { strategy: css, value: "a[href*='/biz/']", priority: 1 }
+
+onboarding.save_business:
+  - { strategy: css, value: "button[aria-label*='Save']", priority: 1 }
+  - { strategy: text, value: "Save", priority: 2 }
+
+onboarding.follow_user:
+  - { strategy: css, value: "button[aria-label*='Follow']", priority: 1 }
+
+phone.phone_input:
+  - { strategy: css, value: "input[name='phone_number']", priority: 1 }
+  - { strategy: css, value: "input[type='tel']", priority: 2 }
+
+phone.otp_input:
+  - { strategy: css, value: "input[name='code']", priority: 1 }
+  - { strategy: css, value: "input[autocomplete='one-time-code']", priority: 2 }
+
+phone.submit:
+  - { strategy: css, value: "button[type='submit']", priority: 1 }
+  - { strategy: text, value: "Send code", priority: 2 }
+
+phone.error:
+  - { strategy: text, value: "invalid", priority: 1 }
+
+login.email:
+  - { strategy: css, value: "input#email", priority: 1 }
+  - { strategy: css, value: "input[name='email']", priority: 2 }
+
+login.password:
+  - { strategy: css, value: "input#password", priority: 1 }
+  - { strategy: css, value: "input[name='password']", priority: 2 }
+
+login.submit:
+  - { strategy: css, value: "button[type='submit']", priority: 1 }
+  - { strategy: text, value: "Log In", priority: 2 }
+
+nav.login_button:
+  - { strategy: css, value: "a[href*='/login']", priority: 1 }
+  - { strategy: text, value: "Log In", priority: 2 }
+
+warmup.search:
+  - { strategy: css, value: "input[name='find_desc']", priority: 1 }
+  - { strategy: css, value: "input[placeholder*='Search']", priority: 2 }
+
+warmup.search_submit:
+  - { strategy: css, value: "button[type='submit'][aria-label*='Search']", priority: 1 }
+  - { strategy: css, value: "form[action*='/search'] button[type='submit']", priority: 2 }
+
+warmup.review_stars:
+  - { strategy: css, value: "div[role='radiogroup'] button[aria-label*='star']", priority: 1 }
+
+warmup.review_text:
+  - { strategy: css, value: "textarea[name='review']", priority: 1 }
+  - { strategy: css, value: "textarea[placeholder*='review']", priority: 2 }
+
+warmup.review_submit:
+  - { strategy: css, value: "button[type='submit'][name='submit-review']", priority: 1 }
+  - { strategy: text, value: "Post Review", priority: 2 }
+
+warmup.vote_useful:
+  - { strategy: css, value: "button[aria-label*='Useful']", priority: 1 }
+
+warmup.save_business:
+  - { strategy: css, value: "button[aria-label*='Save']", priority: 1 }
+
+blocked.page:
+  - { strategy: text, value: "blocked", priority: 1 }
+  - { strategy: css, value: "[data-testid='blocked-page']", priority: 2 }

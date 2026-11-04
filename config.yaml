@@ -1,0 +1,40 @@
+gpm:
+  flavor: global-v1
+  base_url: "http://127.0.0.1:9495"
+  mcp_url: "http://127.0.0.1:9495/mcp"
+  read_only: false
+  browser_version: "153.0.8010.53"
+concurrency:
+  workers: 8
+  max_profiles: 8
+  ram_guard_pct: 85
+target:
+  country: US
+  cities: ["Delray Beach, FL"]
+  zip_pool_file: data/zips_us.json
+proxy:
+  kind: residential
+  sticky_minutes: 45
+  probe_timeout_s: 8
+  max_fail_streak: 2
+email:
+  provider: ms_graph
+  domains: ["fviainboxes.com"]
+  poll_timeout_s: 180
+  resend_wait_s: 60
+  graph_client_id: "9e5f94bc-e8a4-4e73-b8be-63364c29d753"
+  graph_tenant: consumers
+  imap_host: "outlook.office365.com"
+sms:
+  provider: smsapi
+  country: US
+  max_price: 0.35
+captcha:
+  providers: [capsolver, 2captcha]
+  timeout_s: 90
+  human_in_loop: true
+warming:
+  enabled: true
+  max_sessions_per_day: 3
+retention:
+  artifacts_days: 7
