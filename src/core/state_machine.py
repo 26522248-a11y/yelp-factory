@@ -123,7 +123,11 @@ class StateMachine:
         order = [stage.state for stage in self.stages]
 
         if current in order:
-            pending = order[order.index(current) :]
+            idx = order.index(current)
+            # Replay the current stage only if it never finished; completed stages must not
+            # re-run (SUBMITTED has side effects).
+            inclusive = current.value not in completed
+            pending = order[idx if inclusive else idx + 1 :]
         else:
             pending = []
 

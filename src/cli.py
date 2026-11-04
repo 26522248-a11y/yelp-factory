@@ -214,7 +214,8 @@ def build_parser() -> argparse.ArgumentParser:
     resume.add_argument("--proxy", default=None)
     resume.set_defaults(func=cmd_resume)
 
-    report = sub.add_parser("report", help="aggregate numbers for a time window")    report.add_argument("--since", default="24h")
+    report = sub.add_parser("report", help="aggregate numbers for a time window")
+    report.add_argument("--since", default="24h")
     report.set_defaults(func=cmd_report)
 
     sub.add_parser("reap", help="clean locks, stuck runs, orphan profiles, old artifacts").set_defaults(func=cmd_reap)

@@ -13,7 +13,7 @@ from core.config import Settings
 from core.crypto import SecretBox
 from core.lock import AccountLockManager
 from core.state_machine import StageContext, StateMachine
-from db.models import Account, AccountState, Profile, Quarantine, RunState
+from db.models import Account, AccountState, Profile, Quarantine, Run, RunState
 from db.session import session_scope
 from flows.pools import build_persona
 from flows.signup import SignupFlow
@@ -134,6 +134,11 @@ async def resume_account(account_id: uuid.UUID, deps: SignupDeps, *, raw_proxy: 
         account = load_account(account_id)
         if account is None:
             raise KeyError(account_id)
+        # We hold the account lock, so any leftover RUNNING row belongs to a dead worker.
+        with session_scope() as session:
+            session.query(Run).filter(Run.account_id == account_id, Run.state == RunState.RUNNING.value).update(
+                {"state": RunState.FAILED.value}
+            )
         run_id = open_run(account_id, kind="resume")
         with bind_context(account_id=str(account_id), run_id=str(run_id)):
             persona = build_persona(account.city or settings.target.cities[0], settings.email.domains[0], zip_override=account.zip)
@@ -217,7 +222,8 @@ async def resume_account(account_id: uuid.UUID, deps: SignupDeps, *, raw_proxy: 
         lock.release(account_id)
 
 
-async def run_batch(account_ids: list[uuid.UUID], deps: SignupDeps, *, concurrency: int = 1, proxy: str | None = None) -> dict:    semaphore = asyncio.Semaphore(max(1, concurrency))
+async def run_batch(account_ids: list[uuid.UUID], deps: SignupDeps, *, concurrency: int = 1, proxy: str | None = None) -> dict:
+    semaphore = asyncio.Semaphore(max(1, concurrency))
     results: dict[str, str] = {}
 
     async def one(account_id: uuid.UUID) -> None:
