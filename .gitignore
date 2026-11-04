@@ -16,3 +16,8 @@ pgdata/
 
 *.egg-info/
 
+
+data/_*.py
+data/_newtoken.txt
+artifacts/
+

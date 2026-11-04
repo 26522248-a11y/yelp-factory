@@ -34,9 +34,18 @@ def _deps(settings):
     registry = SelectorRegistry.from_yaml()
     sms_provider = None
     if settings.sms.api_key:
-        from adapters.sms import SmsActivateProvider
+        from adapters.sms import HupSmsProvider, SmsActivateProvider
 
-        sms_provider = SmsActivateProvider(settings.sms.api_key, country=settings.sms.country)
+        if settings.sms.provider == "hup":
+            sms_provider = HupSmsProvider(
+                settings.sms.api_key,
+                service_id=settings.sms.service_id,
+                status_path=settings.sms.status_path,
+                cancel_path=settings.sms.cancel_path,
+                timeout_s=settings.sms.timeout_s,
+            )
+        else:
+            sms_provider = SmsActivateProvider(settings.sms.api_key, country=settings.sms.country)
     return SignupDeps(
         settings=settings, gpm=gpm, registry=registry, email=email_provider, captcha=captcha, sms=sms_provider
     )

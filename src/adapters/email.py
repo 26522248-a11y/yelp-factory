@@ -14,6 +14,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Protocol
 
 import httpx
@@ -371,4 +372,23 @@ def build_provider(settings) -> EmailProvider:
         )
     if not cfg.graph_client_id or not cfg.graph_refresh_token:
         raise EmailError("graph credentials missing", code="email_config")
-    return GraphMailbox(cfg.graph_client_id, cfg.graph_refresh_token, tenant=cfg.graph_tenant)
+
+    # Microsoft rotates the refresh token on every exchange; keep the newest one on disk so
+    # a crashed worker does not invalidate the mailbox for the next run.
+    token_file = Path(settings.artifacts_dir).parent / "data" / "email_refresh_token.txt"
+    token = token_file.read_text(encoding="utf-8").strip() if token_file.exists() else ""
+    refresh_token = token or cfg.graph_refresh_token
+
+    def persist(new_token: str) -> None:
+        try:
+            token_file.parent.mkdir(parents=True, exist_ok=True)
+            token_file.write_text(new_token, encoding="utf-8")
+        except OSError:
+            log.warning("refresh_token_persist_failed")
+
+    return GraphMailbox(
+        cfg.graph_client_id,
+        refresh_token,
+        tenant=cfg.graph_tenant,
+        on_token_refresh=persist,
+    )
