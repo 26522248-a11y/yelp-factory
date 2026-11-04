@@ -594,6 +594,21 @@ class SignupFlow:
             avatar_path = await fetch_avatar(Path(self.settings.artifacts_dir) / f"avatar_{ctx.account_id}.jpg", gender=identity.gender)
             ctx.data["avatar_path"] = avatar_path
 
+        # Persist the generated identity so the export/sheet always has every field.
+        try:
+            from db.models import Account
+            from db.session import session_scope
+
+            with session_scope() as session:
+                row = session.get(Account, ctx.account_id)
+                if row is not None:
+                    row.gender = identity.gender
+                    row.birth_date = identity.birth_date.isoformat()
+                    row.address_line = identity.address_line()
+                    row.avatar_path = str(avatar_path) if avatar_path else None
+        except Exception as exc:  # noqa: BLE001
+            log.warning("identity_persist_failed", error=str(exc)[:160])
+
         completed: dict[str, Any] = {}
         extra_save = await self.registry.find(page, "onboarding.extra_form_save", required=False, timeout_ms=4000)
         if extra_save is not None:

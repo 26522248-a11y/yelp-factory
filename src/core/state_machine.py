@@ -181,9 +181,17 @@ class StateMachine:
 
 
 def _safe(data: dict[str, Any]) -> dict[str, Any]:
+    import dataclasses
     import json
 
     from obs.redact import redact_obj
 
-    # ctx.data chứa cả dataclass (Persona, ProxyTarget) lẫn bytes; JSONB chỉ nhận JSON.
-    return json.loads(json.dumps(redact_obj(data), default=str))
+    # ctx.data chứa dataclass (Persona, Identity, ProxyTarget) lẫn bytes; JSONB chỉ nhận JSON.
+    def _default(value: Any) -> Any:
+        if dataclasses.is_dataclass(value):
+            return dataclasses.asdict(value)
+        if isinstance(value, bytes):
+            return value.decode("utf-8", "ignore")
+        return str(value)
+
+    return json.loads(json.dumps(redact_obj(data), default=_default))
