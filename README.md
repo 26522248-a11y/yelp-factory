@@ -5,6 +5,7 @@ browser thật qua GPM Login Global, điều khiển bằng Playwright CDP.
 
 Spec gốc: `SPEC` v1.0 (mục 1-19). Các điểm lệch spec: `docs/DEVIATIONS.md`.
 Ma trận edge case: `docs/EDGE_CASES.md`. Vận hành: `docs/RUNBOOK.md`.
+**Hướng dẫn sử dụng A–Z: [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md)**
 
 ## Trạng thái hiện tại
 
