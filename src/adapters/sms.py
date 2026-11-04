@@ -116,7 +116,9 @@ class HupSmsProvider:
         )
 
     async def _get(self, path: str, params: dict | None = None) -> dict:
-        response = await self._client.get(f"{self.base_url}{path}", params=params)
+        # The docs authenticate with ?api_key=; the header is kept as a second factor.
+        query = {"api_key": self.api_key, **(params or {})}
+        response = await self._client.get(f"{self.base_url}{path}", params=query)
         if response.status_code == 404:
             raise SMSError(f"hup endpoint not found: {path}", code="sms_api")
         if response.status_code >= 400:
