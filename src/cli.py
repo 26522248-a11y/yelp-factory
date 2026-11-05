@@ -106,7 +106,7 @@ def cmd_status(args) -> int:
     print(
         f"warming : sessions_today={snapshot['sessions_today']} "
         f"actions_today={snapshot['actions_today']} "
-        f"pending={snapshot['pending_tasks']} done_today={snapshot['done_today']}"
+        f"pending_tasks={snapshot['pending_tasks']} done_today={snapshot['done_today']}"
     )
     print(f"next_due: {snapshot['next_due'] or '-'}")
     rows = list_batches()

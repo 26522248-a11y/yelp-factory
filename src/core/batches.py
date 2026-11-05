@@ -262,8 +262,10 @@ def _account_progress(session, account: Account, *, today_start: datetime) -> Ac
             Run.account_id == account.id, Step.name == "SUBMITTED", Step.status == "DONE"
         )
     ) or 0
-    profile_done = (account.substate or "") in ("profile_completed", "avatar_uploaded")
-    avatar = bool(account.avatar_path) and Path(account.avatar_path).exists()
+    profile_done = (account.substate or "") in ("profile_completed", "avatar_uploaded") or bool(
+        account.birth_date and account.address_line
+    )
+    avatar_done = (account.substate or "") == "avatar_uploaded" and bool(account.avatar_path) and Path(account.avatar_path).exists()
     due = session.scalar(
         select(func.min(WarmingTask.due_at)).join(WarmingPlan, WarmingPlan.id == WarmingTask.plan_id).where(
             WarmingPlan.account_id == account.id,
@@ -276,7 +278,7 @@ def _account_progress(session, account: Account, *, today_start: datetime) -> Ac
     action = next_action_for(
         account.state,
         submitted_done=bool(submitted),
-        has_avatar=avatar,
+        has_avatar=avatar_done,
         profile_done=profile_done,
         warm_due=due is not None,
     )

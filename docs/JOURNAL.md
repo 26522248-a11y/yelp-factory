@@ -10,3 +10,4 @@
 2026-11-04 23:55  avatar: gán 24 ảnh unique, upload 22/24 (2 lỗi proxy)
 2026-11-05 00:20  thêm batch tracking (B0–B3), lệnh `yf status`, `yf batch`
 2026-11-05 00:25  docs: AGENT_GUIDE + STATE + skill yelp-factory
+2026-11-05 09:40  fix: giu substate khi warm (khong mat avatar_uploaded), bao cao avatar dung 22/24 + 2 pending; cap nhat STATE

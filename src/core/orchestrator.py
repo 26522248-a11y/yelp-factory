@@ -678,7 +678,7 @@ async def run_warm(account_id: uuid.UUID, deps: SignupDeps, *, sessions: int = 1
                 max_seconds=max_seconds,
             )
             results.append(outcome)
-            persist_account_state(account_id, AccountState.WARMING)
+            persist_account_state(account_id, AccountState.WARMING, substate=account.substate)
     finally:
         try:
             await browser.close()
