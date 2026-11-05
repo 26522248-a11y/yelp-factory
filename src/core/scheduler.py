@@ -111,13 +111,18 @@ def due_sessions(now: datetime | None = None, *, limit: int = 8) -> list[DueSess
         ).all()
         candidates = [(task, plan, account) for task, plan, account in rows]
 
+    from core.batches import paused_batch_ids
     from core.trust import latest_trust
     from db.models import WarmingSession
+
+    paused = paused_batch_ids()
 
     for task, plan, account in candidates:
         if len(sessions) >= limit:
             break
         if account.state not in (AccountState.ACTIVE.value, AccountState.WARMING.value):
+            continue
+        if account.batch_id is not None and account.batch_id in paused:
             continue
         if not within_working_hours(account.city or "Austin, TX"):
             continue
@@ -189,16 +194,19 @@ def daily_plan_day(account_id: uuid.UUID) -> int:
 
 
 def bootstrap(limit_accounts: int = 200) -> dict[str, int]:
-    """Ensure every ACTIVE/WARMING account has a plan for today."""
+    """Ensure every ACTIVE/WARMING account has a plan for today (paused batches excluded)."""
+    from core.batches import paused_batch_ids
+
     created = 0
+    paused = paused_batch_ids()
     with session_scope() as session:
         accounts = session.scalars(
             select(Account)
             .where(Account.state.in_((AccountState.ACTIVE.value, AccountState.WARMING.value)))
             .limit(limit_accounts)
         ).all()
-        rows = [(a.id, a.city) for a in accounts]
-    for account_id, city in rows:
+        rows = [(a.id, a.city, a.batch_id) for a in accounts if a.batch_id is None or a.batch_id not in paused]
+    for account_id, city, _batch_id in rows:
         day = daily_plan_day(account_id)
         if enqueue_day(account_id, city=city or "Austin, TX", day=day):
             created += 1

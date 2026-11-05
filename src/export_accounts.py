@@ -186,6 +186,23 @@ def main() -> None:
         writer = csv.DictWriter(fh, fieldnames=FIELDS)
         writer.writeheader()
         writer.writerows(rows)
+
+    try:
+        from core.batches import list_batches
+
+        batch_rows = list_batches()
+        batch_fields = [
+            "name", "status", "source", "target", "accounts", "sessions_today",
+            "actions_today", "trust_min", "trust_max", "next_actions", "next_due", "created_at",
+        ]
+        with (OUT / "batches.csv").open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=batch_fields)
+            writer.writeheader()
+            for item in batch_rows:
+                writer.writerow({key: item.get(key) for key in batch_fields})
+    except Exception as exc:  # noqa: BLE001 - export of accounts must not fail on batch report
+        print(json.dumps({"batches_export_error": str(exc)[:160]}))
+
     print(json.dumps({"accounts": len(rows), "backfilled": updated, "fields": len(FIELDS)}))
 
 

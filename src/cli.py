@@ -52,11 +52,122 @@ def _deps(settings):
 def cmd_avatar(args) -> int:
     import uuid as _uuid
 
+    from sqlalchemy import select
+
     from core.orchestrator import upload_avatar
+    from db.models import Account, AccountState
+    from db.session import session_scope
 
     settings = get_settings()
     deps = _deps(settings)
-    _print(asyncio.run(upload_avatar(_uuid.UUID(args.account), deps, avatar_path=args.file)))
+    if getattr(args, "batch", None):
+        from core.batches import batch_account_ids
+
+        ids = batch_account_ids(args.batch)
+    elif args.all or args.missing:
+        statement = select(Account.id).where(
+            Account.state.in_(
+                (AccountState.ACTIVE.value, AccountState.WARMING.value, AccountState.ONBOARDED.value)
+            )
+        )
+        if args.missing:
+            statement = statement.where(Account.substate.is_distinct_from("avatar_uploaded"))
+        with session_scope() as session:
+            ids = list(session.scalars(statement.order_by(Account.created_at)))
+    else:
+        if not args.account:
+            _print({"error": "account_required"})
+            return 2
+        ids = [_uuid.UUID(args.account)]
+
+    async def run_all():
+        semaphore = asyncio.Semaphore(max(1, args.concurrency))
+
+        async def one(account_id):
+            async with semaphore:
+                try:
+                    return await upload_avatar(account_id, deps, avatar_path=args.file)
+                except Exception as exc:  # noqa: BLE001
+                    return {"account": str(account_id), "ok": False, "error": str(exc)[:200]}
+
+        return await asyncio.gather(*(one(account_id) for account_id in ids))
+
+    results = list(asyncio.run(run_all())) if ids else []
+    ok = sum(1 for item in results if item.get("ok"))
+    _print({"count": len(results), "ok": ok, "results": results})
+    return 0 if ok == len(results) else 1
+
+
+def cmd_status(args) -> int:
+    from core.batches import list_batches, status_snapshot
+
+    snapshot = status_snapshot()
+    print("accounts: " + " ".join(f"{key}={value}" for key, value in sorted(snapshot["states"].items())))
+    print(
+        f"warming : sessions_today={snapshot['sessions_today']} "
+        f"actions_today={snapshot['actions_today']} "
+        f"pending={snapshot['pending_tasks']} done_today={snapshot['done_today']}"
+    )
+    print(f"next_due: {snapshot['next_due'] or '-'}")
+    rows = list_batches()
+    if args.by_batch:
+        for item in rows:
+            phases = ", ".join(f"{key}:{value}" for key, value in (item["phases"] or {}).items()) or "-"
+            trust = (
+                f"{item['trust_min']}-{item['trust_max']}"
+                if item["trust_min"] is not None
+                else "-"
+            )
+            actions = ", ".join(f"{key}:{value}" for key, value in item["next_actions"].items()) or "-"
+            print(
+                f"{item['name']:<4} {item['accounts']:>3} acc  {item['status']:<8} "
+                f"{phases:<26} sessions={item['sessions_today']:<3} actions={item['actions_today']:<4} "
+                f"trust={trust:<7} next={actions}"
+            )
+    else:
+        print(f"batches : {len(rows)}")
+    return 0
+
+
+def cmd_batch(args) -> int:
+    import json
+
+    from core import batches as store
+
+    action = args.batch_action
+    name = args.name or getattr(args, "name_opt", None)
+    if action not in ("list", "backfill") and not name:
+        print("batch name required")
+        return 2
+    try:
+        if action == "create":
+            print(json.dumps(store.create_batch(name, source=args.source, target_count=args.target, notes=args.notes), default=str))
+        elif action == "list":
+            for item in store.list_batches():
+                phases = ", ".join(f"{key}:{value}" for key, value in (item["phases"] or {}).items()) or "-"
+                print(
+                    f"{item['name']:<4} {item['accounts']:>3} acc  {item['status']:<8} {phases:<26} "
+                    f"sessions={item['sessions_today']} actions={item['actions_today']} "
+                    f"next={item['next_actions']}"
+                )
+        elif action == "show":
+            print(json.dumps(store.batch_summary(name), default=str, ensure_ascii=False, indent=2))
+        elif action == "next":
+            print(json.dumps(store.batch_next(name), default=str, ensure_ascii=False, indent=2))
+        elif action == "backfill":
+            print(json.dumps(store.backfill_legacy()))
+        elif action == "pause":
+            print(json.dumps(store.set_status(name, "paused")))
+        elif action == "resume":
+            print(json.dumps(store.set_status(name, "warming")))
+        elif action == "close":
+            print(json.dumps(store.set_status(name, "closed")))
+        else:
+            print(f"unknown action: {action}")
+            return 2
+    except ValueError as exc:
+        print(str(exc))
+        return 2
     return 0
 
 
@@ -121,12 +232,23 @@ def cmd_schedule(args) -> int:
 def cmd_warm(args) -> int:
     import uuid as _uuid
 
+    from core.batches import batch_account_ids
     from core.orchestrator import run_warm
 
     settings = get_settings()
     deps = _deps(settings)
-    result = asyncio.run(run_warm(_uuid.UUID(args.account), deps, sessions=args.sessions, max_seconds=args.minutes * 60))
-    _print(result)
+    if getattr(args, "batch", None):
+        ids = batch_account_ids(args.batch)
+    elif args.account:
+        ids = [_uuid.UUID(args.account)]
+    else:
+        _print({"error": "account_or_batch_required"})
+        return 2
+    results = [
+        asyncio.run(run_warm(account_id, deps, sessions=args.sessions, max_seconds=args.minutes * 60))
+        for account_id in ids
+    ]
+    _print({"count": len(results), "results": results})
     return 0
 
 
@@ -141,7 +263,11 @@ def cmd_profile(args) -> int:
 
     settings = get_settings()
     deps = _deps(settings)
-    if args.all:
+    if getattr(args, "batch", None):
+        from core.batches import batch_account_ids
+
+        ids = batch_account_ids(args.batch)
+    elif args.all:
         with session_scope() as session:
             ids = list(
                 session.scalars(
@@ -156,6 +282,9 @@ def cmd_profile(args) -> int:
                 )
             )
     else:
+        if not args.account:
+            _print({"error": "account_or_batch_required"})
+            return 2
         ids = [_uuid.UUID(args.account)]
 
     async def run_all():
@@ -312,6 +441,17 @@ def cmd_signup(args) -> int:
             )
     domain = args.domain or settings.email.domains[0]
     deps = _deps(settings)
+
+    batch_id = None
+    if getattr(args, "batch", None):
+        from core.batches import create_batch, get_batch
+
+        batch = get_batch(args.batch)
+        if batch is None:
+            create_batch(args.batch, source=args.source, target_count=args.count)
+            batch = get_batch(args.batch)
+        batch_id = batch.id
+
     account_ids = []
     try:
         for _ in range(args.count):
@@ -322,6 +462,7 @@ def cmd_signup(args) -> int:
                     source=args.source,
                     max_per_proxy=args.max_per_proxy,
                     probe_city=auto_city and pool_proxy_source,
+                    batch_id=batch_id,
                 )
             )
     except RuntimeError as exc:
@@ -455,11 +596,8 @@ def build_parser() -> argparse.ArgumentParser:
     signup.add_argument("--domain", default=None)
     signup.add_argument("--proxy", default=None)
     signup.add_argument("--concurrency", type=int, default=1)
-    signup.add_argument(
-        "--source",
-        choices=["auto", "pool_email", "pool_proxy", "pool_both"],
-        default="auto",
-    )
+    signup.add_argument("--source", choices=["auto", "pool_email", "pool_proxy", "pool_both"], default="auto")
+    signup.add_argument("--batch", default=None, help="batch name (created if missing)")
     signup.add_argument("--max-per-proxy", type=int, default=2)
     signup.add_argument("--dry-run", action="store_true")
     signup.set_defaults(func=cmd_signup)
@@ -469,14 +607,29 @@ def build_parser() -> argparse.ArgumentParser:
     resume.add_argument("--proxy", default=None)
     resume.set_defaults(func=cmd_resume)
 
-    warm = sub.add_parser("warm", help="run warming sessions for an ACTIVE account")
-    warm.add_argument("--account", required=True)
+    warm = sub.add_parser("warm", help="run warming sessions for an ACTIVE account or batch")
+    warm.add_argument("--account", default=None)
+    warm.add_argument("--batch", default=None)
     warm.add_argument("--sessions", type=int, default=1)
     warm.add_argument("--minutes", type=int, default=12)
     warm.set_defaults(func=cmd_warm)
 
+    status = sub.add_parser("status", help="compact factory status")
+    status.add_argument("--by-batch", action="store_true")
+    status.set_defaults(func=cmd_status)
+
+    batch = sub.add_parser("batch", help="batch tracking")
+    batch.add_argument("batch_action", choices=["create", "list", "show", "next", "backfill", "pause", "resume", "close"])
+    batch.add_argument("name", nargs="?", default=None)
+    batch.add_argument("--name", dest="name_opt", default=None)
+    batch.add_argument("--source", default="auto")
+    batch.add_argument("--target", type=int, default=0)
+    batch.add_argument("--notes", default=None)
+    batch.set_defaults(func=cmd_batch)
+
     profile = sub.add_parser("profile", help="fill every optional Yelp profile field")
     profile.add_argument("--account", default=None)
+    profile.add_argument("--batch", default=None)
     profile.add_argument("--all", action="store_true")
     profile.add_argument("--concurrency", type=int, default=2)
     profile.set_defaults(func=cmd_profile)
@@ -489,8 +642,12 @@ def build_parser() -> argparse.ArgumentParser:
     schedule.set_defaults(func=cmd_schedule)
 
     avatar = sub.add_parser("avatar", help="upload the stored avatar to an account profile")
-    avatar.add_argument("--account", required=True)
+    avatar.add_argument("--account", default=None)
+    avatar.add_argument("--batch", default=None)
+    avatar.add_argument("--all", action="store_true")
+    avatar.add_argument("--missing", action="store_true")
     avatar.add_argument("--file", default=None)
+    avatar.add_argument("--concurrency", type=int, default=2)
     avatar.set_defaults(func=cmd_avatar)
 
     trust = sub.add_parser("trust", help="show the trust score of an account")

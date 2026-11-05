@@ -43,6 +43,7 @@ def create_account(
     source: str = "auto",
     max_per_proxy: int = 2,
     probe_city: bool = False,
+    batch_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
     """Create one account row. ``source`` chooses generated vs imported email/proxy."""
     from core.pool import reserve_email, reserve_proxy
@@ -85,6 +86,7 @@ def create_account(
     with session_scope() as session:
         account = Account(
             id=account_id,
+            batch_id=batch_id,
             email=persona.email_alias,
             email_alias=persona.email_alias,
             first_name=persona.first_name,

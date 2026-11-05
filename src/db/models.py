@@ -91,6 +91,21 @@ class Proxy(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class Batch(Base):
+    __tablename__ = "batches"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
+    source: Mapped[str] = mapped_column(String(24), default="auto", nullable=False)
+    target_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="planned", nullable=False)
+    config_snapshot: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    notes: Mapped[str | None] = mapped_column(String(400))
+
+
 class Account(Base):
     __tablename__ = "accounts"
     __table_args__ = (
@@ -100,6 +115,7 @@ class Account(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=_uuid)
+    batch_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("batches.id"))
     profile_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("profiles.id"))
     email_pool_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("email_pool.id"))
     proxy_pool_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("proxy_pool.id"))
